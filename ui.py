@@ -226,29 +226,52 @@ def treemap(df, color_range: float, height: int = 620, root: str = "S&P 500 대�
     return fig
 
 
-# ── 리서치 코멘트 카드 (텔레그램) ─────────────────────
-_POST_CSS = """
+# ── 리서치 코멘트 요약 (텔레그램) ─────────────────────
+_SUMMARY_CSS = """
 <style>
-.tg-card { display:flex; flex-direction:column; gap:.5rem; height:100%; min-height:300px; padding:.9rem 1rem;
-           border:1px solid rgba(255,255,255,.12); border-radius:.6rem; background:rgba(255,255,255,.03); }
-.tg-head { display:flex; justify-content:space-between; align-items:center; gap:.5rem; font-size:.78rem; }
-.tg-ch { padding:.1rem .5rem; border-radius:.3rem; background:rgba(57,135,229,.18); color:#8fbaf0; font-weight:600;
-         white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.tg-time { opacity:.6; white-space:nowrap; }
-.tg-fwd { font-size:.74rem; opacity:.55; }
-.tg-img { width:100%; max-height:140px; object-fit:cover; object-position:top; border-radius:.4rem; display:block; }
-.tg-body { font-size:.86rem; line-height:1.5; white-space:pre-line; opacity:.9;
-           display:-webkit-box; -webkit-line-clamp:7; -webkit-box-orient:vertical; overflow:hidden; }
-.tg-card details { font-size:.86rem; order:5; }  /* 미리보기 글 아래로 */
-.tg-card details summary { cursor:pointer; font-size:.78rem; opacity:.7; }
-.tg-card details[open] summary { font-size:0; }                       /* 펼치면 '접기'로 */
-.tg-card details[open] summary::after { content:"접기"; font-size:.78rem; }
-.tg-card details[open] + .tg-body-clamped { display:none; }
-.tg-full { white-space:pre-line; line-height:1.5; margin-top:.4rem; opacity:.9; }
-.tg-foot { margin-top:auto; font-size:.8rem; order:6; }
-.tg-foot a { text-decoration:none; }
+.sm-head { font-size:1.02rem; font-weight:600; line-height:1.55; padding:.7rem .9rem; margin-bottom:.6rem;
+           border-left:3px solid #3987e5; background:rgba(57,135,229,.08); border-radius:.3rem; }
+.sm-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); gap:.7rem; }
+.sm-card { display:flex; flex-direction:column; gap:.45rem; padding:.85rem 1rem; border-radius:.6rem;
+           border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.03); }
+.sm-top { display:flex; gap:.5rem; align-items:center; }
+.sm-view { font-size:.72rem; font-weight:600; padding:.08rem .45rem; border-radius:.3rem; white-space:nowrap; }
+.sm-up { background:rgba(230,103,103,.16); color:#ef8b8b; }
+.sm-down { background:rgba(57,135,229,.18); color:#8fbaf0; }
+.sm-mixed { background:rgba(255,255,255,.08); color:rgba(255,255,255,.7); }
+.sm-title { font-weight:700; font-size:.95rem; line-height:1.35; }
+.sm-body { font-size:.86rem; line-height:1.6; opacity:.9; }
+.sm-src { display:flex; flex-wrap:wrap; gap:.3rem; margin-top:auto; }
+.sm-src a { font-size:.74rem; text-decoration:none; padding:.08rem .45rem; border-radius:.3rem;
+            border:1px solid rgba(255,255,255,.15); color:rgba(255,255,255,.75); white-space:nowrap; }
+.sm-src a:hover { border-color:#3987e5; color:#8fbaf0; }
+.sm-watch { font-size:.86rem; line-height:1.6; margin-top:.7rem; }
+.sm-watch li { margin-left:1rem; }
 </style>
 """
+_VIEW_CLASS = {"금리 상승 요인": "sm-up", "금리 하락 요인": "sm-down"}
+
+
+def render_summary(summary: dict) -> None:
+    """한 줄 요약 → 논점 카드(금리 방향·출처 링크) → 앞으로 볼 일정. st.html이라 본문이 마크다운으로 바뀌지 않음."""
+    e = html.escape
+    cards = []
+    for t in summary.get("themes", []):
+        view = t.get("rates_view", "해당 없음")
+        srcs = "".join(
+            f'<a href="{e(x["link"], quote=True)}" target="_blank">{e(x["channel"])} {x["time"][11:16]} ↗</a>'
+            for x in t["sources"])
+        cards.append(
+            f'<div class="sm-card"><div class="sm-top"><span class="sm-view {_VIEW_CLASS.get(view, "sm-mixed")}">'
+            f'{e(view)}</span><span class="sm-title">{e(t["title"])}</span></div>'
+            f'<div class="sm-body">{e(t["summary"])}</div><div class="sm-src">{srcs}</div></div>')
+    watch = "".join(f"<li>{e(w)}</li>" for w in summary.get("watch", []))
+    st.html(
+        _SUMMARY_CSS
+        + (f'<div class="sm-head">{e(summary["headline"])}</div>' if summary.get("headline") else "")
+        + f'<div class="sm-grid">{"".join(cards)}</div>'
+        + (f'<div class="sm-watch"><b>📅 앞으로 볼 것</b><ul>{watch}</ul></div>' if watch else "")
+    )
 
 
 def _ago(ts: pd.Timestamp, now: pd.Timestamp) -> str:
@@ -260,27 +283,13 @@ def _ago(ts: pd.Timestamp, now: pd.Timestamp) -> str:
     return f"{int(sec // 86400)}일 전"
 
 
-def render_post_cards(posts: list[dict], full_text: bool = True) -> None:
-    """텔레그램 글 카드를 가로로. 긴 글은 앞부분만 보이고 '전체 보기'로 펼친다.
-
-    st.markdown은 본문의 '- '·'#' 등을 마크다운으로 바꿔버려 원문이 깨지므로 st.html로 그린다.
-    """
+def render_post_list(posts: list[dict]) -> None:
+    """원문 확인용: 채널·시각·첫 줄·링크만 한 줄씩."""
     now = pd.Timestamp.now()
-    cols = st.columns(max(len(posts), 1), gap="small")
-    for col, p in zip(cols, posts):
-        raw = p["text"] if full_text else "\n".join(p["text"].splitlines()[:4])[:200]  # 공개 배포: 앞부분만
-        text = html.escape(raw) if raw else "<i>(이미지만 있는 글)</i>"
-        long = full_text and (len(raw) > 220 or raw.count("\n") > 6)
-        body = (f'<details><summary>전체 보기</summary><div class="tg-full">{text}</div></details>'
-                f'<div class="tg-body tg-body-clamped">{text}</div>') if long else f'<div class="tg-body">{text}</div>'
-        img = (f'<a href="{html.escape(p["link"], quote=True)}" target="_blank">'
-               f'<img class="tg-img" src="{html.escape(p["photo"], quote=True)}" loading="lazy"></a>') if p["photo"] else ""
-        fwd = f'<div class="tg-fwd">↪ {html.escape(p["forwarded"])}에서 전달</div>' if p.get("forwarded") else ""
-        with col:
-            st.html(
-            _POST_CSS +
-            f'<div class="tg-card"><div class="tg-head"><span class="tg-ch">{html.escape(p["channel"])}</span>'
-            f'<span class="tg-time">{p["time"]:%m/%d %H:%M} · {_ago(p["time"], now)}</span></div>'
-            f'{fwd}{img}{body}'
-            f'<div class="tg-foot"><a href="{html.escape(p["link"], quote=True)}" target="_blank">원문 보기 ↗</a></div></div>'
-            )
+    rows = []
+    for p in posts:
+        first = (p["text"].strip().splitlines() or ["(이미지만 있는 글)"])[0][:90]
+        rows.append(f'<div class="news-item"><a href="{html.escape(p["link"], quote=True)}" target="_blank">'
+                    f'{html.escape(first)}</a><div class="news-meta"><span class="news-tag">'
+                    f'{html.escape(p["channel"])}</span>{p["time"]:%m/%d %H:%M} · {_ago(p["time"], now)}</div></div>')
+    st.html(_NEWS_CSS + "".join(rows))

@@ -54,24 +54,24 @@ def fetch_channel(handle: str) -> list[dict]:
     return sorted(posts, key=lambda p: p["time"], reverse=True)
 
 
-def latest_posts(handles: list[str], n: int = 3) -> tuple[list[dict], list[str]]:
-    """최근 글 n개. 반환: (글 목록·최신순, 불러오지 못한 채널).
+def load_summary() -> dict | None:
+    """summarize_telegram.py가 하루 3회 만드는 최신 요약. 없으면 None."""
+    import json
+    try:
+        return json.loads(config.SUMMARY_FILE.read_text())
+    except (FileNotFoundError, ValueError):
+        return None
 
-    채널 하나면 그 채널의 최신 n개. 여러 개면 글을 자주 올리는 채널이 칸을 독차지하지 않도록
-    최신 글이 새로운 채널 순서대로 한 개씩 번갈아 고른다.
-    """
+
+def recent_posts(hours: int = 24) -> list[dict]:
+    """요약 대상 채널의 최근 글 (원문 확인용 목록, 최신순)."""
+    since = pd.Timestamp.now() - pd.Timedelta(hours=hours)
+
     def safe(h):
         try:
-            return h, fetch_channel(h)
+            return fetch_channel(h)
         except Exception:
-            return h, None
+            return []
     with ThreadPoolExecutor(max_workers=6) as ex:
-        results = list(ex.map(safe, handles))
-    failed = [h for h, posts in results if posts is None]
-    queues = sorted((list(posts) for _, posts in results if posts), key=lambda q: q[0]["time"], reverse=True)
-    picked = []
-    while len(picked) < n and any(queues):
-        for q in queues:
-            if q and len(picked) < n:
-                picked.append(q.pop(0))
-    return sorted(picked, key=lambda p: p["time"], reverse=True), failed
+        posts = [p for chunk in ex.map(safe, list(config.TELEGRAM_CHANNELS)) for p in chunk if p["time"] >= since]
+    return sorted(posts, key=lambda p: p["time"], reverse=True)

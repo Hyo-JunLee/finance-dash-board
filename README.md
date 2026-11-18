@@ -11,7 +11,7 @@
 | 오늘의 시황 | 주요 지수·환율·금리·원자재 카드(실시간 또는 종가 시각 표시), 이번 주 미국 경제지표 일정(예상·실제), 최근 발표 지표의 컨센서스 대비 서프라이즈, 헤드라인 |
 | 국내 증시 | KRX 업종 지수 등락, 시가총액 상위 히트맵, 등락률·거래대금 상위, ETF |
 | 해외 증시 | 주요국 지수(장중·마감 시각), S&P 500 대형주 히트맵, 섹터 ETF, 스타일 상대강도 |
-| 매크로 | 금리·물가·고용·성장·금융여건, 경제지표 서프라이즈 이력, 리서치 코멘트(텔레그램 공개 채널) |
+| 매크로 | 금리·물가·고용·성장·금융여건, 경제지표 서프라이즈 이력, 리서치 코멘트 요약(채권·매크로 텔레그램 6개 채널 → Claude 요약, 하루 3회) |
 | 채권 | 10년물 분해(실질+BEI / 기대경로+텀프리미엄)와 교차 판정, 곡선 국면 분류, 국채 입찰 수요 평가, 연준 순유동성, 한국 국고채 |
 | 뉴스 | 국내·해외 RSS 통합, 키워드 검색 |
 | 데이터 상태 | 소스별 신선도 점검, 수집기 실행 기록 |
@@ -58,6 +58,7 @@ streamlit run app.py        # http://localhost:8501
 
 - 수집기(3시간마다 CSV 누적 + 상태 점검 알림): `python collect.py`, 자동 실행 등록 `zsh scripts/install_collector.sh`
 - 대시보드 자동 실행(macOS 로그인 시): `zsh scripts/install_dashboard.sh`
+- 리서치 코멘트 요약(하루 3회, 로그인된 Claude Code `claude -p` 사용 · 도구 없음 · 출처 id 검증): `python summarize_telegram.py`, 자동 실행 등록 `zsh scripts/install_summarizer.sh`
 - 테스트: `pip install -r requirements-dev.txt && python -m pytest`
 
 ## 공개 배포 (Streamlit Community Cloud)
@@ -70,6 +71,7 @@ Secrets에 `FRED_API_KEY`, `KRX_API_KEY`, `PUBLIC_MODE = "1"`을 넣습니다. �
 app.py            진입점·메뉴
 config.py         키·캐시 주기·채널 목록 (.env 또는 Streamlit Secrets)
 collect.py        주기 수집 + 상태 점검 알림
+summarize_telegram.py  텔레그램 리서치 요약 (하루 3회)
 data/             소스별 수집·계산 (fred, rates, bonds, bond_attribution, surprise, krx, health …)
 views/            화면
 ui.py             공용 차트·카드

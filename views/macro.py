@@ -7,8 +7,8 @@ import streamlit as st
 from data import macro as m
 import config
 from data.surprise import get_surprises
-from data.telegram import latest_posts
-from ui import bar_chart, curve_chart, kpi, line_chart, render_post_cards, show_chart
+from data.telegram import load_summary, recent_posts
+from ui import bar_chart, curve_chart, kpi, line_chart, render_post_list, render_summary, show_chart
 
 PERIODS = {"1년": 1, "3년": 3, "5년": 5, "10년": 10}
 
@@ -26,25 +26,29 @@ def clip(s: pd.Series) -> pd.Series:
     return s[s.index >= cutoff]
 
 
-# ── 리서치 코멘트 (텔레그램 공개 채널) ─────────────────
-with st.expander("📮 리서치 코멘트", expanded=True):
-    names = config.TELEGRAM_CHANNELS
-    picked = st.pills("채널", list(names), default=config.TELEGRAM_DEFAULT, selection_mode="multi",
-                      format_func=names.get, key="tg_channels", label_visibility="collapsed")
-    if not picked:
-        st.caption("채널을 하나 이상 고르세요.")
+# ── 리서치 코멘트 요약 (텔레그램 6개 채널 → Claude 요약, 하루 3회) ──────
+with st.expander("📮 리서치 코멘트 요약", expanded=True):
+    summary = load_summary()
+    if summary is None:
+        st.info("아직 요약이 없습니다. 하루 3회(08:30·13:30·18:30) 자동으로 만들어집니다.")
     else:
-        with st.spinner("최근 글 불러오는 중..."):
-            posts, failed = latest_posts(picked, 3)
+        made = pd.Timestamp(summary["generated_at"])
+        age_h = (pd.Timestamp.now() - made).total_seconds() / 3600
+        channels = " · ".join(f"{k} {v}" for k, v in summary.get("channels", {}).items())
+        st.caption(f"{made:%m/%d %H:%M} 기준 · 최근 {summary.get('window_hours', 24)}시간 글 "
+                   f"{summary.get('post_count', 0)}개 ({channels}) · 하루 3회 08:30·13:30·18:30 갱신")
+        if age_h > 15:
+            st.warning(f"요약이 {age_h:.0f}시간 전 것입니다. 맥이 꺼져 있었거나 요약 실행이 실패했을 수 있습니다 (데이터 상태 화면 참고).")
+        render_summary(summary)
+        st.caption("AI(Claude)가 각 채널 글을 묶어 요약한 것으로 틀리거나 빠진 내용이 있을 수 있습니다. "
+                   "숫자·판단은 출처 링크의 원문으로 확인하세요. 의견은 각 채널 작성자의 것이며 투자 권유가 아닙니다.")
+    with st.popover("원문 최근 글 보기"):
+        with st.spinner("불러오는 중..."):
+            posts = recent_posts(24)
         if posts:
-            render_post_cards(posts, full_text=not config.PUBLIC_MODE)
+            render_post_list(posts)
         else:
-            st.info("최근 글이 없습니다.")
-        if failed:
-            st.caption("불러오지 못한 채널: " + ", ".join(
-                f"[{names.get(h, h)}](https://t.me/s/{h})" for h in failed) + " (텔레그램에서 직접 확인)")
-        st.caption("텔레그램 공개 채널 웹 미리보기 · 10분마다 갱신 · 여러 채널을 고르면 채널별 최신 글을 번갈아 보여줌 · "
-                   "의견은 각 채널 작성자의 것이며 투자 권유가 아님")
+            st.caption("최근 24시간 동안 글이 없거나 불러오지 못했습니다.")
 
 
 with st.spinner("FRED 지표 불러오는 중... (첫 로딩은 최대 30초)"):
