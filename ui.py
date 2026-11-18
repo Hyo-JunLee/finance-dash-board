@@ -258,9 +258,12 @@ def render_summary(summary: dict) -> None:
     cards = []
     for t in summary.get("themes", []):
         view = t.get("rates_view", "해당 없음")
-        srcs = "".join(
-            f'<a href="{e(x["link"], quote=True)}" target="_blank">{e(x["channel"])} {x["time"][11:16]} ↗</a>'
-            for x in t["sources"])
+        # 같은 채널이 같은 분에 올린 글이 여러 개면 칩은 하나만 (첫 글로 연결)
+        chips = {}
+        for x in t["sources"]:
+            chips.setdefault(f'{x["channel"]} {x["time"][11:16]}', x["link"])
+        srcs = "".join(f'<a href="{e(link, quote=True)}" target="_blank">{e(label)} ↗</a>'
+                       for label, link in chips.items())
         cards.append(
             f'<div class="sm-card"><div class="sm-top"><span class="sm-view {_VIEW_CLASS.get(view, "sm-mixed")}">'
             f'{e(view)}</span><span class="sm-title">{e(t["title"])}</span></div>'
@@ -293,3 +296,67 @@ def render_post_list(posts: list[dict]) -> None:
                     f'{html.escape(first)}</a><div class="news-meta"><span class="news-tag">'
                     f'{html.escape(p["channel"])}</span>{p["time"]:%m/%d %H:%M} · {_ago(p["time"], now)}</div></div>')
     st.html(_NEWS_CSS + "".join(rows))
+
+
+
+# ── 오늘의 이슈 (뉴스 헤드라인 AI 묶음) ──────────────
+_ISSUE_CSS = """
+<style>
+.is-cols { display:grid; grid-template-columns:repeat(auto-fit, minmax(380px, 1fr)); gap:1.2rem; }
+.is-col h4 { margin:0 0 .4rem 0; font-size:.95rem; }
+.is-item { padding:.6rem 0; border-bottom:1px solid rgba(255,255,255,.08); }
+.is-top { display:flex; align-items:center; gap:.45rem; }
+.is-title { font-weight:700; font-size:.93rem; }
+.is-tag { font-size:.7rem; padding:.05rem .4rem; border-radius:.3rem; background:rgba(255,255,255,.08);
+          color:rgba(255,255,255,.7); white-space:nowrap; }
+.is-bar { display:flex; align-items:center; gap:.4rem; margin:.3rem 0 .2rem; font-size:.74rem; opacity:.75; }
+.is-bar span.b { height:6px; border-radius:3px; background:#3987e5; display:inline-block; }
+.is-sum { font-size:.85rem; line-height:1.5; opacity:.9; }
+.is-arts { margin-top:.25rem; font-size:.76rem; line-height:1.6; }
+.is-arts a { text-decoration:none; color:rgba(255,255,255,.65); display:block; white-space:nowrap;
+             overflow:hidden; text-overflow:ellipsis; }
+.is-arts a:hover { color:#8fbaf0; }
+</style>
+"""
+
+
+def render_issues(payload: dict, per_region: int = 5) -> None:
+    """해외·국내 두 열. 이슈마다 분야 태그, 기사 수 막대(화제성), 한 줄 요약, 대표 기사 링크."""
+    e = html.escape
+    issues = payload.get("issues", [])
+    top = max((i["count"] for i in issues), default=1)
+    cols = []
+    for region, flag in (("해외", "🌎"), ("국내", "🇰🇷")):
+        rows = []
+        for it in [i for i in issues if i["region"] == region][:per_region]:
+            arts = "".join(f'<a href="{e(a["link"], quote=True)}" target="_blank">↗ {e(a["source"])} · {e(a["title"])}</a>'
+                           for a in it["articles"])
+            rows.append(
+                f'<div class="is-item"><div class="is-top"><span class="is-title">{e(it["title"])}</span>'
+                f'<span class="is-tag">{e(it["category"])}</span></div>'
+                f'<div class="is-bar"><span class="b" style="width:{max(it["count"] / top * 160, 6):.0f}px"></span>'
+                f'기사 {it["count"]}건</div><div class="is-sum">{e(it["summary"])}</div>'
+                f'<div class="is-arts">{arts}</div></div>')
+        cols.append(f'<div class="is-col"><h4>{flag} {region}</h4>{"".join(rows) or "<i>해당 이슈 없음</i>"}</div>')
+    st.html(_ISSUE_CSS + f'<div class="is-cols">{"".join(cols)}</div>')
+
+
+# ── 오늘의 시황 카드용 미니 차트 (x축 날짜 표시) ───────
+def mini_chart(s, up: bool, days: int, height: int = 96):
+    """카드 아래 작은 영역 차트. y축은 숨기고 x축에 날짜 눈금 3~4개, 마우스를 올리면 날짜·값."""
+    import plotly.graph_objects as go
+
+    color = UP_COLOR if up else DOWN_COLOR
+    fill = "rgba(230,103,103,0.15)" if up else "rgba(57,135,229,0.15)"
+    fig = go.Figure(go.Scatter(
+        x=s.index, y=s.values, mode="lines", line=dict(color=color, width=1.6),
+        fill="tozeroy", fillcolor=fill, hovertemplate="%{x|%y/%m/%d %H:%M}<br>%{y:,.2f}<extra></extra>",
+    ))
+    lo, hi = float(s.min()), float(s.max())
+    pad = (hi - lo) * 0.08 or abs(hi) * 0.01 or 1
+    fig.update_layout(height=height, margin=dict(l=0, r=0, t=2, b=0), showlegend=False, hovermode="x",
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    fig.update_yaxes(visible=False, range=[lo - pad, hi + pad])
+    fig.update_xaxes(showgrid=False, ticks="", nticks=4, tickfont=dict(size=10, color=_MUTED),
+                     tickformat="%-m/%-d" if days <= 95 else "%y.%-m", linecolor=_GRID)
+    return fig

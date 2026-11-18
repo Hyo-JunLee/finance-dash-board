@@ -129,23 +129,25 @@ def check_news():
 
 
 def check_telegram():
-    """채널 글을 읽을 수 있는지 + 하루 3회 요약이 제때 만들어지는지 (밤사이 18:30→08:30 14시간 공백은 정상)."""
+    """AI 요약(리서치·뉴스, 하루 3회)이 제때 만들어지는지 + 채널 글을 읽을 수 있는지.
+    밤사이(18:30→08:30) 14시간 공백은 정상이라 15시간까지 정상으로 본다."""
     import json
     from data.telegram import fetch_channel
-    posts = fetch_channel(next(iter(config.TELEGRAM_CHANNELS)))
-    try:
-        summary = json.loads(config.SUMMARY_FILE.read_text())
-        made = datetime.fromisoformat(summary["generated_at"])
-    except (FileNotFoundError, ValueError, KeyError):
-        made = None
-    if not posts:
-        return _result("텔레그램 요약", "매크로(리서치 코멘트)", WARN, "-", "채널 글을 읽지 못함 (웹 미리보기 구조 변경?)")
-    if made is None:
-        return _result("텔레그램 요약", "매크로(리서치 코멘트)", WARN, "-", "요약 파일 없음")
-    hours = (datetime.now() - made).total_seconds() / 3600
-    status = OK if hours <= 15 else WARN if hours <= 30 else FAIL
-    return _result("텔레그램 요약", "매크로(리서치 코멘트)", status, f"{made:%m/%d %H:%M}",
-                   f"요약 {hours:.0f}시간 전 (하루 3회) · 글 {summary.get('post_count', 0)}개 · 논점 {len(summary.get('themes', []))}개")
+    name, used = "AI 요약 (리서치·뉴스)", "오늘의 시황 (이슈·리서치 요약)"
+    if not fetch_channel(next(iter(config.TELEGRAM_CHANNELS))):
+        return _result(name, used, WARN, "-", "텔레그램 채널 글을 읽지 못함 (웹 미리보기 구조 변경?)")
+    ages, parts = [], []
+    for label, path in (("리서치", config.SUMMARY_FILE), ("뉴스", config.NEWS_SUMMARY_FILE)):
+        try:
+            made = datetime.fromisoformat(json.loads(path.read_text())["generated_at"])
+        except (FileNotFoundError, ValueError, KeyError):
+            return _result(name, used, WARN, "-", f"{label} 요약 파일 없음")
+        hours = (datetime.now() - made).total_seconds() / 3600
+        ages.append((hours, made))
+        parts.append(f"{label} {hours:.0f}시간 전")
+    oldest_h, oldest = max(ages)
+    status = OK if oldest_h <= 15 else WARN if oldest_h <= 30 else FAIL
+    return _result(name, used, status, f"{oldest:%m/%d %H:%M}", " · ".join(parts) + " (하루 3회 08:30·13:30·18:30)")
 
 
 def check_acm():
@@ -212,7 +214,7 @@ CHECKS = [check_collector, check_dashboard_service, check_treasury, check_cnbc, 
 NAMES = {"collector": "수집기 (3시간마다)", "dashboard_service": "대시보드 자동 실행", "treasury": "미 재무부 국채 금리",
          "cnbc": "CNBC 실시간 금리", "fred": "FRED 경제지표", "yahoo": "Yahoo 시세", "naver": "네이버 (국내 지수)",
          "krx": "KRX Open API", "nasdaq": "Nasdaq 경제 캘린더", "forexfactory": "ForexFactory 일정",
-         "news": "뉴스 RSS", "telegram": "텔레그램 요약", "acm": "뉴욕 연은 ACM 텀 프리미엄", "auctions": "재무부 입찰 결과"}
+         "news": "뉴스 RSS", "telegram": "AI 요약 (리서치·뉴스)", "acm": "뉴욕 연은 ACM 텀 프리미엄", "auctions": "재무부 입찰 결과"}
 
 
 def check_all() -> pd.DataFrame:

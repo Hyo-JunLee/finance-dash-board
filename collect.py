@@ -103,7 +103,7 @@ def collect_market_daily() -> None:
             cols[label] = macro.yahoo(symbol, years=3)
         elif source == "naver":
             cols[label] = get_price_series(source, symbol, days=800)
-    for label, symbol in [("VIX", "^VIX"), ("MOVE", "^MOVE"), ("달러인덱스", "DX-Y.NYB")]:
+    for label, symbol in [("MOVE", "^MOVE")]:  # VIX·달러인덱스는 SUMMARY_ITEMS에 포함
         cols[label] = macro.yahoo(symbol, years=3)
     curve = rates.get_treasury_curve(start)
     for tenor, (col, _, _) in rates.TENORS.items():

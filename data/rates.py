@@ -60,12 +60,28 @@ def get_treasury_curve(start: date, kind: str = NOMINAL) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def get_cnbc_quotes(symbols: tuple[str, ...] = CNBC_SYMBOLS) -> dict[str, tuple[float, datetime]]:
-    """{심볼: (금리%, 시각 KST)}"""
+def _cnbc_raw(symbols: tuple[str, ...]) -> list[dict]:
     r = requests.get(CNBC_QUOTE.format(symbols="|".join(symbols)), headers=_HEADERS, timeout=10)
     r.raise_for_status()
+    return r.json()["FormattedQuoteResult"]["FormattedQuote"]
+
+
+def get_cnbc_prev_close(symbols: tuple[str, ...] = CNBC_SYMBOLS) -> dict[str, float]:
+    """CNBC 자체 전일 종가(뉴욕 17시, 소수 셋째 자리). 실시간 값의 전일 대비는 같은 출처끼리 비교해야
+    재무부 종가(15:30, 소수 둘째 자리)와의 기준·반올림 차이로 방향이 뒤집히지 않는다."""
     out = {}
-    for q in r.json()["FormattedQuoteResult"]["FormattedQuote"]:
+    for q in _cnbc_raw(symbols):
+        try:
+            out[q["symbol"]] = float(str(q["previous_day_closing"]).rstrip("%"))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def get_cnbc_quotes(symbols: tuple[str, ...] = CNBC_SYMBOLS) -> dict[str, tuple[float, datetime]]:
+    """{심볼: (금리%, 시각 KST)}"""
+    out = {}
+    for q in _cnbc_raw(symbols):
         try:
             val = float(str(q["last"]).rstrip("%"))
             ts = pd.Timestamp(q["last_time"]).tz_convert("Asia/Seoul").tz_localize(None)

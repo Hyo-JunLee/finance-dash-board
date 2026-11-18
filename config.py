@@ -50,4 +50,6 @@ TELEGRAM_CHANNELS = {
     "lim_econ": "한화 경제",
 }
 TTL_TELEGRAM = 60 * 10
-SUMMARY_FILE = CACHE_DIR / "telegram_summary.json"  # 화면용 최신 요약 (summarize_telegram.py가 하루 3회 갱신)
+# 화면용 최신 AI 요약 (summarize.py가 하루 3회 갱신)
+SUMMARY_FILE = CACHE_DIR / "telegram_summary.json"
+NEWS_SUMMARY_FILE = CACHE_DIR / "news_summary.json"

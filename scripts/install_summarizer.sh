@@ -1,5 +1,5 @@
 #!/bin/zsh
-# 텔레그램 리서치 요약(summarize_telegram.py)을 launchd에 등록: 매일 08:30 · 13:30 · 18:30
+# AI 요약(summarize.py: 텔레그램 리서치 + 뉴스 이슈)을 launchd에 등록: 매일 08:30 · 13:30 · 18:30
 # 맥이 잠자기였다면 깨어난 뒤 밀린 실행을 한 번 한다. 해제: zsh scripts/install_summarizer.sh uninstall
 set -e
 LABEL="com.kevinlee.market-dashboard-summarizer"
@@ -23,7 +23,7 @@ cat > "$PLIST" <<PLIST
     <key>ProgramArguments</key>
     <array>
         <string>$PYTHON</string>
-        <string>$PROJECT/summarize_telegram.py</string>
+        <string>$PROJECT/summarize.py</string>
     </array>
     <key>WorkingDirectory</key><string>$PROJECT</string>
     <key>EnvironmentVariables</key>

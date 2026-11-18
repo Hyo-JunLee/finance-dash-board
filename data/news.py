@@ -93,3 +93,12 @@ def get_news() -> pd.DataFrame:
         .reset_index(drop=True)
     )
     return df
+
+
+def load_news_summary() -> dict | None:
+    """summarize.py가 하루 3회 만드는 뉴스 이슈 요약. 없으면 None."""
+    import json
+    try:
+        return json.loads(config.NEWS_SUMMARY_FILE.read_text())
+    except (FileNotFoundError, ValueError):
+        return None
