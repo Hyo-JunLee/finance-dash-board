@@ -1,6 +1,7 @@
 """RSS 기반 금융 뉴스 수집."""
 import html
 import re
+from urllib.parse import quote
 from concurrent.futures import ThreadPoolExecutor
 
 import feedparser
@@ -13,6 +14,17 @@ import config
 
 # (출처명, 분류, URL, 시간대 표기가 없을 때 가정할 시간대)
 # 매경(403 차단), 머니투데이(2025년 이후 갱신 중단)는 제외
+# 제목에 금융 키워드가 있는 기사만 (본문 검색이면 연예·생활 기사가 섞임)
+_GNEWS_WORDS = ["stocks", "stock", "bonds", "treasuries", "treasury", "yields", "fed", "inflation", "dollar",
+                "oil", "economy", "rates", "markets", "shares", "currency", "yen", "yuan", "gold", "ECB", "BOJ",
+                "tariffs", "GDP"]
+
+
+def _gnews(site: str) -> str:
+    q = f"when:1d site:{site} " + " OR ".join(f"intitle:{w}" for w in _GNEWS_WORDS)
+    return "https://news.google.com/rss/search?q=" + quote(q) + "&hl=en-US&gl=US&ceid=US:en"
+
+
 FEEDS = [
     ("한국경제",      "국내",     "https://www.hankyung.com/feed/finance",              "Asia/Seoul"),
     ("한국경제",      "국내",     "https://www.hankyung.com/feed/economy",              "Asia/Seoul"),
@@ -26,11 +38,19 @@ FEEDS = [
     ("WSJ",           "해외",     "https://feeds.content.dowjones.io/public/rss/RSSMarketsMain", "UTC"),
     ("Investing.com", "해외",     "https://www.investing.com/rss/news_25.rss",          "UTC"),
     ("Nasdaq",        "해외",     "https://www.nasdaq.com/feed/rssoutbound?category=Markets", "UTC"),
+    ("FT",            "해외",     "https://www.ft.com/markets?format=rss",              "UTC"),
+    ("FT",            "해외",     "https://www.ft.com/global-economy?format=rss",       "UTC"),
+    # 로이터·블룸버그는 공개 RSS가 없어 구글 뉴스 검색 RSS로 제목만 받는다 (링크는 구글 뉴스 경유, 요약 없음)
+    ("Reuters",       "해외",     _gnews("reuters.com"),                               "UTC"),
+    ("Bloomberg",     "해외",     _gnews("bloomberg.com"),                             "UTC"),
     ("Fed",           "정책·기관", "https://www.federalreserve.gov/feeds/press_all.xml",  "UTC"),
+    ("ECB",           "정책·기관", "https://www.ecb.europa.eu/rss/press.html",           "UTC"),
     ("한국은행",      "정책·기관", "https://www.bok.or.kr/portal/bbs/B0000501/news.rss?menuNo=201264", "Asia/Seoul"),
 ]
 
 _TAG = re.compile(r"<[^>]+>")
+_GNEWS_SUFFIX = re.compile(r"\s+-\s+(Reuters|Bloomberg(\.com)?|Bloomberg Law)$")
+MAX_PER_FEED = 40  # 구글 뉴스 검색 피드는 100개씩 와서 국내·해외 비중을 흐리므로 피드당 최신 N개
 _WS = re.compile(r"\s+")
 
 
@@ -62,8 +82,13 @@ def _fetch_feed(feed) -> list[dict]:
     except requests.RequestException:
         return []
     rows = []
+    google = "news.google.com" in url
     for e in feedparser.parse(r.content).entries:
         title = _clean(e.get("title", ""), 300)
+        if google:
+            title = _GNEWS_SUFFIX.sub("", title)
+            if " " not in title or "Stock Price" in title or "Latest Updates" in title:  # 종목 시세·토픽 페이지
+                continue
         if not title:
             continue
         rows.append({
@@ -71,10 +96,11 @@ def _fetch_feed(feed) -> list[dict]:
             "source": source,
             "category": category,
             "title": title,
-            "summary": _clean(e.get("summary", "")),
+            "summary": "" if google else _clean(e.get("summary", "")),  # 구글 뉴스 요약은 제목 링크 반복뿐
             "link": e.get("link", ""),
         })
-    return rows
+    rows = [x for x in rows if x["time"] is not None] + [x for x in rows if x["time"] is None]
+    return sorted(rows, key=lambda x: x["time"] or pd.Timestamp.min, reverse=True)[:MAX_PER_FEED]
 
 
 @st.cache_data(ttl=config.TTL_NEWS, show_spinner=False)

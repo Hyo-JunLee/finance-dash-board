@@ -1,6 +1,6 @@
 import pytest
 
-from data.bond_attribution import attribute, curve_check, summary_text, tp_model_check
+from data.bond_attribution import attribute, curve_check, liquidity_check, summary_text, tp_model_check
 
 NOISE = 3.0
 
@@ -106,3 +106,45 @@ def test_summary_mentions_assumption_and_period_mismatch():
     assert "기대 인플레 경로(B) 변화 ≈ 0" in text
     assert "공통 마지막 날짜" in text
     assert "시사" in text
+
+
+# ── 유동성 왜곡 경고 (TIPS 유동성 프리미엄) ──
+def test_liquidity_march_2020_warns_and_flags_d():
+    """2020년 3월형: MOVE +95%, HY +500bp, BEI 급락 → 경고 + D 하락을 유동성 요인으로 지목."""
+    text, warn = liquidity_check(d_hy_bp=500, hy_level=10.0, move_chg_pct=95, move_level=135,
+                                 d_component_d=-60, noise_bp=NOISE)
+    assert warn
+    assert "유동성 왜곡 가능" in text
+    assert "D -60bp 하락" in text
+
+
+def test_liquidity_calm_no_warning():
+    text, warn = liquidity_check(d_hy_bp=-10, hy_level=3.3, move_chg_pct=-5, move_level=95,
+                                 d_component_d=-8, noise_bp=NOISE)
+    assert not warn
+    assert "경색 신호 없음" in text
+
+
+@pytest.mark.parametrize("kwargs", [
+    dict(d_hy_bp=80, hy_level=4.0, move_chg_pct=5, move_level=100),    # HY 확대만
+    dict(d_hy_bp=0, hy_level=6.5, move_chg_pct=0, move_level=100),     # HY 수준만
+    dict(d_hy_bp=0, hy_level=3.5, move_chg_pct=33, move_level=129),    # MOVE 급등만 (2025-04형)
+    dict(d_hy_bp=0, hy_level=3.5, move_chg_pct=10, move_level=170),    # MOVE 수준만 (2023-03형)
+])
+def test_liquidity_any_single_signal_warns(kwargs):
+    _, warn = liquidity_check(**kwargs, d_component_d=0, noise_bp=NOISE)
+    assert warn
+
+
+def test_liquidity_warns_without_blaming_d_when_d_not_falling():
+    text, warn = liquidity_check(d_hy_bp=200, hy_level=7.0, move_chg_pct=50, move_level=160,
+                                 d_component_d=2, noise_bp=NOISE)
+    assert warn and "판정을 그대로 믿기 어렵습니다" not in text
+
+
+def test_liquidity_missing_data():
+    text, warn = liquidity_check(None, None, None, None, d_component_d=-20, noise_bp=NOISE)
+    assert not warn and "점검하지 못했습니다" in text
+    # HY는 FRED가 최근 3년만 제공 → 기간 시작값이 없으면 수준만으로 판정
+    _, warn = liquidity_check(None, 6.2, None, 110, d_component_d=0, noise_bp=NOISE)
+    assert warn

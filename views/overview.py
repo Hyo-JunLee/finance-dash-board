@@ -3,13 +3,14 @@ from datetime import datetime, timedelta
 import pandas as pd
 import streamlit as st
 
+import config
 from data.consensus import parse_value
 from data.econ_calendar import ff_fetched_at, get_recent_indicators, get_week_actuals, get_week_calendar
 from data.market import SUMMARY_ITEMS, fmt_asof, get_snapshot
 from data.news import get_news, load_news_summary
 from data.telegram import load_summary, recent_posts
 from ui import (DOWN_COLOR, UP_COLOR, mini_chart, render_issues, render_news, render_post_list, render_summary,
-                show_chart)
+                render_views, show_chart)
 
 PERIODS = {"1개월": 30, "3개월": 90, "6개월": 180, "1년": 365}
 Z_ALERT = 2.0  # 오늘 변화가 1년 일간 변동(표준편차)의 이 배수를 넘으면 '이례적'
@@ -53,6 +54,21 @@ head_l.title("오늘의 시황")
 head_l.caption(f"조회 시각 {datetime.now():%Y-%m-%d %H:%M} (KST) · 카드 시각은 KST (시각만 = 실시간, '종가' = 공식 마감) · "
                f"막대 = 1년 최저~최고 중 현재 위치 · 차트 색 = 선택 기간 방향 · ⚡ = 평소 하루 변동의 {Z_ALERT:.0f}배 이상")
 period = head_r.segmented_control("차트 기간", list(PERIODS), default="3개월") or "3개월"
+
+# ── 아침 인사이트 (08:30 AI, 대시보드 데이터를 엮은 1~2문장) ──────
+insight = load_summary(config.INSIGHT_FILE)
+if insight and insight.get("lines"):
+    made = pd.Timestamp(insight["generated_at"])
+    stale = made.date() != datetime.now().date()
+    with st.container(border=True):
+        st.markdown(f"**☀️ 아침 인사이트** · {made:%m/%d %H:%M}" + (" :orange[(오늘 것 아님)]" if stale else ""))
+        st.markdown("  \n".join(insight["lines"]).replace("$", "\\$").replace("~", "\\~"))  # 달러·물결이 수식·취소선으로 바뀌지 않게
+        if insight.get("watch"):
+            st.markdown(f"👀 **오늘 볼 것**: {insight['watch']}")
+        note = f"근거: {' · '.join(insight.get('basis', []))} · AI(Claude)가 대시보드 데이터만으로 쓴 해석이며 투자 권유가 아닙니다"
+        if insight.get("unverified_numbers"):
+            note += f" · :orange[데이터에서 확인되지 않은 숫자: {', '.join(insight['unverified_numbers'])}]"
+        st.caption(note)
 cutoff = pd.Timestamp(datetime.now() - timedelta(days=PERIODS[period]))
 
 # ── 요약 카드 (자산군별) ─────────────────────────────
@@ -175,6 +191,31 @@ with st.expander("📮 리서치 코멘트 요약", expanded=True):
             render_post_list(posts)
         else:
             st.caption("최근 24시간 동안 글이 없거나 불러오지 못했습니다.")
+
+# ── 바이사이드 관점 (개인 공부용 채널 → '무엇이 반영됐고 무엇을 볼 것인가', 로컬 전용) ──────
+if not config.PUBLIC_MODE:
+    with st.expander("🧭 바이사이드 관점", expanded=True):
+        views = load_summary(config.BUYSIDE_SUMMARY_FILE)
+        if views is None:
+            st.info("아직 정리된 관점이 없습니다. 하루 3회(08:30·13:30·18:30) 자동으로 만들어집니다.")
+        else:
+            made = pd.Timestamp(views["generated_at"])
+            channels = " · ".join(f"{k} {v}" for k, v in views.get("channels", {}).items())
+            st.caption(f"{made:%m/%d %H:%M} 기준 · 최근 {views.get('window_hours', 24)}시간 글 "
+                       f"{views.get('post_count', 0)}개 ({channels}) · 사후 설명·단순 전달은 빼고 "
+                       "논지·시장 반영과의 차이·확인/반증 신호만 정리")
+            if (pd.Timestamp.now() - made).total_seconds() > 15 * 3600:
+                st.warning("관점 정리가 오래됐습니다. 맥이 꺼져 있었거나 요약 실행이 실패했을 수 있습니다.")
+            render_views(views)
+            st.caption("AI(Claude)가 정리한 것으로 원문과 다를 수 있습니다. 'AI 추론' 표시가 붙은 신호는 글이 직접 말한 것이 "
+                       "아니라 논지에서 끌어낸 것입니다. 의견은 각 채널 작성자의 것이며 투자 권유가 아닙니다.")
+        with st.popover("원문 최근 글 보기"):
+            with st.spinner("불러오는 중..."):
+                bs_posts = recent_posts(24, config.BUYSIDE_CHANNELS)
+            if bs_posts:
+                render_post_list(bs_posts)
+            else:
+                st.caption("최근 24시간 동안 글이 없거나 불러오지 못했습니다.")
 
 
 st.divider()

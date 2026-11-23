@@ -25,10 +25,15 @@ def _clean(fragment: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+_NAMES = {**config.TELEGRAM_CHANNELS, **config.BUYSIDE_CHANNELS}
+
+
 @st.cache_data(ttl=config.TTL_TELEGRAM, show_spinner=False)
-def fetch_channel(handle: str) -> list[dict]:
-    """최근 글 목록 (최신순). 글자·사진이 모두 없는 서비스 메시지는 제외."""
-    r = requests.get(f"https://t.me/s/{handle}", headers=_HEADERS, timeout=15)
+def fetch_channel(handle: str, before: int | None = None) -> list[dict]:
+    """최근 글 목록 (최신순, 한 페이지 약 20개). before=글 번호면 그보다 이전 페이지.
+    글자·사진이 모두 없는 서비스 메시지는 제외."""
+    url = f"https://t.me/s/{handle}" + (f"?before={before}" if before else "")
+    r = requests.get(url, headers=_HEADERS, timeout=15)
     r.raise_for_status()
     posts = []
     for block in r.text.split(_BLOCK)[1:]:
@@ -44,7 +49,7 @@ def fetch_channel(handle: str) -> list[dict]:
             continue
         posts.append({
             "handle": handle,
-            "channel": config.TELEGRAM_CHANNELS.get(handle, handle),
+            "channel": _NAMES.get(handle, handle),
             "time": pd.Timestamp(when.group(1)).tz_convert("Asia/Seoul").tz_localize(None),
             "text": body,
             "photo": photo.group(1) if photo else None,
@@ -54,24 +59,36 @@ def fetch_channel(handle: str) -> list[dict]:
     return sorted(posts, key=lambda p: p["time"], reverse=True)
 
 
-def load_summary() -> dict | None:
-    """summarize_telegram.py가 하루 3회 만드는 최신 요약. 없으면 None."""
+def fetch_since(handle: str, since: pd.Timestamp, max_pages: int = 4) -> list[dict]:
+    """since 이후 글 전부 (최신순). 하루 수십 개씩 올라오는 채널은 이전 페이지까지 넘겨 읽는다."""
+    posts, before = [], None
+    for _ in range(max_pages):
+        page = fetch_channel(handle, before)
+        posts += [p for p in page if p["time"] >= since]
+        if not page or page[-1]["time"] < since:
+            break
+        before = int(page[-1]["link"].rsplit("/", 1)[1])
+    return posts
+
+
+def load_summary(path=None) -> dict | None:
+    """summarize.py가 하루 3회 만드는 최신 요약 (기본: 리서치). 없으면 None."""
     import json
     try:
-        return json.loads(config.SUMMARY_FILE.read_text())
+        return json.loads((path or config.SUMMARY_FILE).read_text())
     except (FileNotFoundError, ValueError):
         return None
 
 
-def recent_posts(hours: int = 24) -> list[dict]:
-    """요약 대상 채널의 최근 글 (원문 확인용 목록, 최신순)."""
+def recent_posts(hours: int = 24, channels: dict | None = None) -> list[dict]:
+    """요약 대상 채널의 최근 글 (원문 확인용 목록, 최신순). 기본: 리서치 채널."""
     since = pd.Timestamp.now() - pd.Timedelta(hours=hours)
 
     def safe(h):
         try:
-            return fetch_channel(h)
+            return fetch_since(h, since)
         except Exception:
             return []
     with ThreadPoolExecutor(max_workers=6) as ex:
-        posts = [p for chunk in ex.map(safe, list(config.TELEGRAM_CHANNELS)) for p in chunk if p["time"] >= since]
+        posts = [p for chunk in ex.map(safe, list(channels or config.TELEGRAM_CHANNELS)) for p in chunk]
     return sorted(posts, key=lambda p: p["time"], reverse=True)

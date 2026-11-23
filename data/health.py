@@ -133,11 +133,12 @@ def check_telegram():
     밤사이(18:30→08:30) 14시간 공백은 정상이라 15시간까지 정상으로 본다."""
     import json
     from data.telegram import fetch_channel
-    name, used = "AI 요약 (리서치·뉴스)", "오늘의 시황 (이슈·리서치 요약)"
+    name, used = "AI 요약 (리서치·뉴스·바이사이드)", "오늘의 시황 (이슈·리서치·관점 요약)"
     if not fetch_channel(next(iter(config.TELEGRAM_CHANNELS))):
         return _result(name, used, WARN, "-", "텔레그램 채널 글을 읽지 못함 (웹 미리보기 구조 변경?)")
     ages, parts = [], []
-    for label, path in (("리서치", config.SUMMARY_FILE), ("뉴스", config.NEWS_SUMMARY_FILE)):
+    for label, path in (("리서치", config.SUMMARY_FILE), ("뉴스", config.NEWS_SUMMARY_FILE),
+                        ("바이사이드", config.BUYSIDE_SUMMARY_FILE)):
         try:
             made = datetime.fromisoformat(json.loads(path.read_text())["generated_at"])
         except (FileNotFoundError, ValueError, KeyError):
@@ -147,6 +148,14 @@ def check_telegram():
         parts.append(f"{label} {hours:.0f}시간 전")
     oldest_h, oldest = max(ages)
     status = OK if oldest_h <= 15 else WARN if oldest_h <= 30 else FAIL
+    try:  # 아침 인사이트는 하루 1회라 26시간까지 정상
+        made = datetime.fromisoformat(json.loads(config.INSIGHT_FILE.read_text())["generated_at"])
+        insight_h = (datetime.now() - made).total_seconds() / 3600
+        parts.append(f"아침 인사이트 {insight_h:.0f}시간 전")
+        if insight_h > 26 and status == OK:
+            status = WARN
+    except (FileNotFoundError, ValueError, KeyError):
+        parts.append("아침 인사이트 없음")
     return _result(name, used, status, f"{oldest:%m/%d %H:%M}", " · ".join(parts) + " (하루 3회 08:30·13:30·18:30)")
 
 
@@ -214,7 +223,7 @@ CHECKS = [check_collector, check_dashboard_service, check_treasury, check_cnbc, 
 NAMES = {"collector": "수집기 (3시간마다)", "dashboard_service": "대시보드 자동 실행", "treasury": "미 재무부 국채 금리",
          "cnbc": "CNBC 실시간 금리", "fred": "FRED 경제지표", "yahoo": "Yahoo 시세", "naver": "네이버 (국내 지수)",
          "krx": "KRX Open API", "nasdaq": "Nasdaq 경제 캘린더", "forexfactory": "ForexFactory 일정",
-         "news": "뉴스 RSS", "telegram": "AI 요약 (리서치·뉴스)", "acm": "뉴욕 연은 ACM 텀 프리미엄", "auctions": "재무부 입찰 결과"}
+         "news": "뉴스 RSS", "telegram": "AI 요약 (리서치·뉴스·바이사이드)", "acm": "뉴욕 연은 ACM 텀 프리미엄", "auctions": "재무부 입찰 결과"}
 
 
 def check_all() -> pd.DataFrame:

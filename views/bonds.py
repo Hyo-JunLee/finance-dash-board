@@ -6,7 +6,9 @@ import streamlit as st
 
 import config
 from data import bonds as b
-from data.bond_attribution import attribute, curve_check, summary_text, tp_model_check
+from data.bond_attribution import attribute, curve_check, liquidity_check, summary_text, tp_model_check
+from data import flow_data as fd
+from data import flow_regime as fr
 from data.fred import get_fred_series
 from data.global_markets import get_closes
 from data.krx import REAL_10Y, kts_yields
@@ -30,6 +32,142 @@ def _since(last: pd.Timestamp, window) -> pd.Timestamp:
 
 def _clip(df, years: int):
     return df[df.index >= df.index[-1] - pd.DateOffset(years=years)]
+
+
+FLOW_JUDGE_WINDOWS = ("1주", "1개월")  # 이보다 긴 기간은 한 번만 튀어도 '스트레스'로 기울어 결합 판정 생략
+
+
+def _z_text(z: pd.Series | None) -> str:
+    z = z.dropna() if z is not None else None
+    return f"z {z.iloc[-1]:+.1f}" if z is not None and len(z) else "z -"
+
+
+def _flow_card(col, label: str, value: str, delta: str | None, z: str, asof: str, help: str, lagged: bool = False):
+    with col:
+        st.metric(label, value, delta, delta_color="off", delta_arrow="off", border=True, help=help)
+        st.caption(f"{z} · " + (f":orange[**{asof}**]" if lagged else asof))
+
+
+def _flow_section(window, attr, noise_bp, since_c, common_end, premium_like, d2, z_thr, n_thr, z_win, corr_win):
+    """수급·포지션: 기존 종합 판정의 움직임이 수급 스트레스를 동반했는지 (판정은 data/flow_regime.py)."""
+    st.markdown("##### 수급·포지션 (정보에 의한 재가격인가, 포지션 정리인가)")
+    with st.spinner("CFTC·FRED·입찰 데이터 불러오는 중..."):
+        zs, errors = fd.stress_series(z_win)
+    try:
+        vol_s, vol_name, vol_sub = fd.rate_vol()
+    except Exception:
+        vol_s, vol_name, vol_sub = None, "금리 변동성", False
+
+    # ── 결론 한 줄 ──
+    judged = window in FLOW_JUDGE_WINDOWS
+    if judged:  # 종합 판정과 같은 기간(공통 마지막 날짜 기준)의 최대 |z|
+        peaks = {k: (fr.window_peak(z, since_c, common_end) if z is not None else None) for k, z in zs.items()}
+        stress = fr.stress_level({k: (p[0] if p else None) for k, p in peaks.items()}, z_thr, n_thr)
+        mismatch = fr.curve_mismatch(attr.leader, premium_like, abs(d2) >= noise_bp)
+        _, text = fr.combine(attr.leader, abs(attr.nominal) >= noise_bp, mismatch, stress["level"])
+        basis = f"기준: 종합 판정과 같은 {window} 기간(~{common_end:%m/%d})의 지표별 최대 |z|"
+    else:
+        now = pd.Timestamp.now()
+        peaks = {k: (fr.window_peak(z, now, now) if z is not None else None) for k, z in zs.items()}
+        stress = fr.stress_level({k: (p[0] if p else None) for k, p in peaks.items()}, z_thr, n_thr)
+        text = f"{window}처럼 긴 기간은 한 번만 튀어도 스트레스로 기울어 정보·수급 결합 판정은 생략하고, 현재 수급 상태만 표시합니다."
+        basis = "기준: 지표별 최신값"
+    if vol_sub:
+        basis += " · 금리 변동성은 MOVE를 받지 못해 10년물 실현변동성으로 대체"
+    with st.container(border=True):
+        st.markdown(fr.flow_summary(text, stress, z_thr, basis))
+        hit_dates = [f"{k} {p[1]:%m/%d} z {p[0]:+.1f}" for k, p in peaks.items() if p]
+        st.caption("지표별 z (날짜): " + " · ".join(hit_dates) + f" · 1년 롤링 z ({z_win}영업일, 주간 데이터는 {max(round(z_win * 52 / 252), 8)}주)")
+
+    # ── 지표 카드 ──
+    row1, row2 = st.columns(4), st.columns(4)
+    try:
+        lev = fd.lev_10y_equiv().dropna()
+        rep_day = lev.index[-1]
+        _flow_card(row1[0], "레버리지 펀드 순포지션 (10년물 환산)", f"{lev.iloc[-1] / 1e4:,.0f}만 계약",
+                   f"주간 {lev.diff().iloc[-1] / 1e4:+,.1f}만", _z_text(zs[fd.LEV]),
+                   f"{rep_day:%m/%d}(화) 기준 · {rep_day + pd.Timedelta(days=3):%m/%d}(금) 발표 · 주간",
+                   "CFTC TFF 레버리지 펀드의 국채 선물 순포지션(롱−숏)을 계약별 DV01 근사치로 10년물 선물 환산. "
+                   "순숏 대부분은 현물·선물 베이시스 트레이드라 방향성 베팅이 아닙니다. 수준보다 **주간 변화의 급변**"
+                   "(베이시스 트레이드 청산 가능성)이 스트레스 신호이고, z도 주간 변화 기준입니다. "
+                   "DV01(달러/bp): " + ", ".join(f"{n} {d}" for n, d in config.TSY_FUTURES.values()), lagged=True)
+    except Exception:
+        _flow_card(row1[0], "레버리지 펀드 순포지션", "데이터 없음", None, "z -", "CFTC 조회 실패", "CFTC 공개 API 호출 실패")
+    try:
+        repo = fd.sofr_iorb()
+        _flow_card(row1[1], "SOFR − IORB", f"{repo.iloc[-1]:+.0f}bp", f"전일 {repo.diff().iloc[-1]:+.0f}bp",
+                   _z_text(zs[fd.REPO]), f"{repo.index[-1]:%m/%d} 기준 (SOFR는 다음 날 공개)",
+                   "담보부 익일물 금리(SOFR)가 연준이 지급준비금에 주는 금리(IORB)보다 높아질수록 레포 자금이 빠듯하다는 뜻. "
+                   "월말·분기말·국채 결제일에 일시적으로 튀는 경향이 있습니다.")
+    except Exception:
+        _flow_card(row1[1], "SOFR − IORB", "데이터 없음", None, "z -", "FRED 조회 실패", "FRED SOFR·IORB 호출 실패")
+    try:
+        srf = fd.fred_daily("RPONTSYD")
+        _flow_card(row1[2], "상설 레포기구(SRF) 이용액", f"${srf.iloc[-1]:,.1f}bn",
+                   f"최근 20일 최대 ${srf.tail(20).max():,.1f}bn", "판정 미사용", f"{srf.index[-1]:%m/%d} 기준",
+                   "연준 익일물 레포로 국채를 담보로 자금을 빌린 금액(FRED RPONTSYD). 평소에는 0에 가까운 시험성 운영이고, "
+                   "크게 늘면 시장에서 레포 자금을 구하기 어렵다는 신호입니다.")
+    except Exception:
+        _flow_card(row1[2], "상설 레포기구(SRF) 이용액", "데이터 없음", None, "판정 미사용", "FRED 조회 실패", "FRED RPONTSYD 호출 실패")
+    _flow_card(row1[3], "스왑스프레드 (10년·30년)", "무료 데이터 없음", None, "판정 미사용", "-",
+               "SOFR 스왑금리 무료 소스를 찾지 못했습니다(FRED DSWP10·30은 LIBOR 기준으로 2016년 중단). 대체값은 만들지 않았습니다.")
+
+    try:
+        a = fd.auction_table().iloc[-1]
+        _flow_card(row2[0], f"최근 입찰 · {a['만기']}", f"응찰률 {a['응찰률']:.2f}",
+                   f"6회 평균 {a['응찰률 6회평균']:.2f} · 딜러 {a['딜러(%)']:.0f}% (평균 {a['딜러(%) 6회평균']:.0f}%) · "
+                   f"해외 {a['해외(%)']:.0f}% (평균 {a['해외(%) 6회평균']:.0f}%)",
+                   _z_text(zs[fd.AUCTION]).replace("z", "약세 z"), f"{a['입찰일']:%m/%d} 입찰 · 테일은 WI 금리 없음으로 생략",
+                   "2·5·7·10·20·30년물 입찰마다 응찰률 하락과 프라이머리 딜러 인수 비율 상승을 같은 만기 직전 6회 평균과 비교해 "
+                   "약세 z로 만든 값(양수일수록 약함). 해외는 간접 응찰 비율. 소스: TreasuryDirect (FiscalData는 2026-10 말 갱신 중단). "
+                   "입찰 테일(낙찰금리 − WI 금리)은 WI 금리가 유료라 생략했습니다(입찰 탭의 근사 테일은 참고용).")
+    except Exception:
+        _flow_card(row2[0], "최근 입찰", "데이터 없음", None, "z -", "TreasuryDirect 조회 실패", "입찰 데이터 호출 실패")
+    if vol_s is not None and len(vol_s):
+        unit = "" if not vol_sub else "bp"
+        _flow_card(row2[1], vol_name, f"{vol_s.iloc[-1]:.1f}{unit}", f"1개월 전 대비 {vol_s.iloc[-1] - vol_s.iloc[-22]:+.1f}",
+                   _z_text(zs[fd.VOL]), f"{vol_s.index[-1]:%m/%d} 기준" + (" · 대체 지표" if vol_sub else ""),
+                   "MOVE: 미 국채 옵션 내재변동성 지수(Yahoo ^MOVE). 받지 못하면 FRED DGS10 일간 변화의 20영업일 표준편차(bp)로 대체하고 "
+                   "카드 이름에 표시합니다.", lagged=vol_sub)
+    else:
+        _flow_card(row2[1], "금리 변동성", "데이터 없음", None, "z -", "조회 실패", "MOVE·DGS10 모두 실패")
+    try:
+        corr = fd.stock_bond_corr(corr_win)
+        c = corr.iloc[-1]
+        _flow_card(row2[2], f"주식·채권 수익률 {corr_win}일 상관", f"{c:+.2f}",
+                   ("채권 헤지 작동" if c < 0 else "주식·채권 동반 움직임") + (" (약함)" if abs(c) < 0.2 else ""), "판정 미사용", f"{corr.index[-1]:%m/%d} 기준",
+                   "S&P 500 일간 수익률과 10년물 국채 일간 수익률(= −금리 변화, FRED SP500·DGS10)의 롤링 상관 (업계 관례). "
+                   "음수 = 주가가 빠지는 날 채권값이 오름 → 채권이 주식 헤지로 작동. "
+                   "양수 = 주가가 빠지는 날 채권값도 빠짐 → 주식·채권 동반 움직임 (2022년처럼 인플레·재정 우려 국면에 흔함).")
+    except Exception:
+        _flow_card(row2[2], "주식·채권 상관", "데이터 없음", None, "판정 미사용", "FRED 조회 실패", "FRED SP500·DGS10 호출 실패")
+    with row2[3]:
+        st.caption("판정에 쓰는 스트레스 지표: 레버리지 펀드 주간 변화, SOFR−IORB, 금리 변동성, 입찰 약세. "
+                   "SRF·주식·채권 상관은 참고용입니다. :orange[주황색 기준일]은 주간 발표이거나 대체 지표라는 뜻입니다.")
+        if errors:
+            st.caption("불러오지 못한 지표: " + " · ".join(f"{k} ({v})" for k, v in errors.items()))
+
+    # ── 차트 (고정 기간) ──
+    c1, c2, c3 = st.columns(3, gap="medium")
+    with c1:
+        try:
+            lev = fd.lev_10y_equiv().dropna() / 1e4
+            show_chart(line_chart({"10년물 환산 순포지션": _clip(lev, 1)}, "레버리지 펀드 순포지션 (1년, 만 계약)",
+                                  height=240, decimals=0))
+        except Exception:
+            st.caption("레버리지 펀드 차트: 데이터 없음")
+    with c2:
+        try:
+            show_chart(line_chart({"SOFR−IORB": _clip(fd.sofr_iorb(), 1)}, "SOFR − IORB (1년)", unit="bp",
+                                  height=240, hline=0, decimals=0))
+        except Exception:
+            st.caption("SOFR−IORB 차트: 데이터 없음")
+    with c3:
+        try:
+            show_chart(line_chart({"상관": _clip(fd.stock_bond_corr(corr_win), 3)},
+                                  f"주식·채권 수익률 {corr_win}일 상관 (3년, 음수 = 헤지 작동)", height=240, hline=0))
+        except Exception:
+            st.caption("주식·채권 상관 차트: 데이터 없음")
 
 
 tabs = st.tabs(["🧩 곡선 분해", "↕️ 곡선 움직임", "🏦 국채 입찰", "💧 연준 유동성", "🇰🇷 한국 국채"])
@@ -77,6 +215,13 @@ with tabs[0]:
                                        help="성분 변화의 절댓값이 이보다 작으면 '유의미한 변화 아님'으로 보고 판정에서 제외")
             gap_bp = s2.number_input("모형 괴리 경고 (bp)", 0.0, 50.0, config.ATTR_TP_MODEL_GAP_BP, 0.5,
                                      help="ACM과 Kim-Wright 텀프리미엄 변화 차이가 이보다 크면 해석 신뢰도 경고")
+            f1, f2, f3 = st.columns(3)
+            flow_z = f1.number_input("수급 z 임계값", 0.5, 5.0, config.FLOW_Z_THRESHOLD, 0.25,
+                                     help="수급·포지션: 스트레스 지표의 |z|가 이 값 이상이면 '튐'으로 셈")
+            flow_n = int(f2.number_input("'높음' 판정 지표 수", 1, 4, config.FLOW_STRESS_COUNT, 1,
+                                         help="튄 지표가 이 개수 이상이면 수급 스트레스 '높음', 1개 이상이면 '주의'"))
+            flow_win = int(f3.number_input("롤링 z 창 (영업일)", 60, 756, config.FLOW_Z_WINDOW_DAYS, 21,
+                                           help="z-score 기준 기간. 252 = 1년. 주간 데이터는 5로 나눈 주 수"))
 
         common_end = min(rb.index[-1], acm.index[-1])
         since_c = _since(common_end, CHANGE_WINDOWS[window])
@@ -98,8 +243,31 @@ with tabs[0]:
         curve = get_treasury_curve((since_c - pd.Timedelta(days=10)).date(), NOMINAL)
         curve_c = b.change_bp(curve[curve.index <= common_end][["2 Yr", "10 Yr", "30 Yr"]], since_c)
 
+        # 유동성 왜곡 점검: 같은 공통 기간의 HY 스프레드(FRED, 최근 3년만 제공)·MOVE 변화
+        def _window(s: pd.Series):
+            s = s[s.index <= common_end]
+            if s.empty:
+                return None, None
+            start = s[s.index <= since_c]
+            return (start.iloc[-1] if len(start) else None), s.iloc[-1]
+        try:
+            hy0, hy1 = _window(get_fred_series("BAMLH0A0HYM2"))
+        except Exception:
+            hy0, hy1 = None, None
+        try:
+            mv0, mv1 = _window(yahoo("^MOVE", years=3))
+        except Exception:
+            mv0, mv1 = None, None
+        liq_text, liq_warn = liquidity_check(
+            (hy1 - hy0) * 100 if hy0 is not None and hy1 is not None else None, hy1,
+            (mv1 / mv0 - 1) * 100 if mv0 is not None and mv1 is not None else None, mv1,
+            attr.components["D"], noise_bp, config.ATTR_HY_WIDEN_BP, config.ATTR_HY_LEVEL,
+            config.ATTR_MOVE_RISE_PCT, config.ATTR_MOVE_LEVEL)
+
         left_c, right_c = st.columns([3, 2], gap="large")
         with left_c, st.container(border=True):
+            if liq_warn:
+                st.warning(liq_text)
             st.markdown(summary_text(attr, f"{common_end:%m/%d}", f"{rb.index[-1]:%m/%d}", f"{acm.index[-1]:%m/%d}",
                                      noise_bp))
         with right_c:
@@ -108,9 +276,18 @@ with tabs[0]:
             kw_text, _ = tp_model_check(acm_c["텀 프리미엄"], d_kw, gap_bp)
             kw_note = f" (Kim-Wright 데이터 ~{kw_end:%m/%d})" if kw_end is not None else ""
             st.markdown(f"**텀프리미엄 모형 비교**  \n{kw_text}{kw_note}")
+            if not liq_warn:
+                st.markdown(f"**유동성 왜곡 점검**  \n{liq_text}",
+                            help="시장 경색 때 TIPS 유동성 프리미엄이 커지면 BEI 하락이 인플레 리스크 프리미엄(D) 하락으로 "
+                                 "잘못 읽힙니다. HY 스프레드나 MOVE가 급등하면 판정 위에 경고를 띄웁니다.")
             st.metric("데이터 정합성 체크", f"{attr.consistency_gap:+.1f}bp", border=True,
                       help="ACM 텀프리미엄 변화 − 내재 텀프리미엄(C+D) 변화. 수식상 'ACM 10년 변화 − 재무부 10년 변화'와 같아, "
                            "가정 검증이 아니라 ACM 무이표채(zero-coupon) 금리와 재무부 이표채(par) 금리의 측정 차이를 보여줍니다.")
+
+    if not acm.empty:
+        _, premium_like = curve_check(curve_c["2 Yr"], curve_c["10 Yr"], curve_c["30 Yr"], noise_bp)
+        _flow_section(window, attr, noise_bp, since_c, common_end, premium_like, curve_c["2 Yr"],
+                      flow_z, flow_n, flow_win, config.FLOW_CORR_WINDOW)
 
     years = CHART_YEARS[st.segmented_control("차트 기간", list(CHART_YEARS), default="3년", key="dec_years") or "3년"]
     l, r = st.columns(2, gap="large")

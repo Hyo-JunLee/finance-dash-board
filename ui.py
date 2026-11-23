@@ -277,6 +277,52 @@ def render_summary(summary: dict) -> None:
     )
 
 
+_VIEWS_CSS = """
+<style>
+.bv-card { display:flex; flex-direction:column; gap:.5rem; padding:.9rem 1rem; border-radius:.6rem;
+           border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.03); }
+.bv-tags { display:flex; flex-wrap:wrap; gap:.3rem; }
+.bv-tag { font-size:.7rem; padding:.05rem .4rem; border-radius:.3rem; background:rgba(255,255,255,.08);
+          color:rgba(255,255,255,.7); white-space:nowrap; }
+.bv-hz { background:rgba(57,135,229,.18); color:#8fbaf0; font-weight:600; }
+.bv-sec { font-size:.84rem; line-height:1.55; }
+.bv-sec b { font-size:.74rem; letter-spacing:.02em; opacity:.6; display:block; margin-bottom:.1rem; }
+.bv-sec ul { margin:0; padding-left:1rem; }
+.bv-vs { border-left:3px solid #d95926; padding:.15rem 0 .15rem .55rem; background:rgba(217,89,38,.07); }
+.bv-sig { display:grid; grid-template-columns:1fr 1fr; gap:.6rem; }
+.bv-ok b { color:#4cc79a; opacity:1; } .bv-no b { color:#ef8b8b; opacity:1; }
+.bv-inf { font-size:.68rem; opacity:.55; font-weight:400; }
+</style>
+"""
+
+
+def render_views(payload: dict) -> None:
+    """바이사이드 관점 카드: 논지 → 시장 반영과의 차이 → 근거 → 확인/반증 신호 → 출처."""
+    e = html.escape
+    ul = lambda xs: "<ul>" + "".join(f"<li>{e(x)}</li>" for x in xs) + "</ul>"
+    cards = []
+    for v in payload.get("views", []):
+        tags = f'<span class="bv-tag bv-hz">{e(v["horizon"])}</span>' + "".join(
+            f'<span class="bv-tag">{e(a)}</span>' for a in v.get("assets", []))
+        vs = (f'<div class="bv-sec bv-vs"><b>시장 반영 vs 이 관점</b>{e(v["vs_market"])}</div>'
+              if v.get("vs_market") else "")
+        ev = f'<div class="bv-sec"><b>근거</b>{ul(v["evidence"])}</div>' if v.get("evidence") else ""
+        inf = '<span class="bv-inf"> · AI 추론</span>' if v.get("signals_inferred") else ""
+        sig = (f'<div class="bv-sig"><div class="bv-sec bv-ok"><b>✓ 맞다면 보일 신호{inf}</b>{ul(v["confirm"])}</div>'
+               f'<div class="bv-sec bv-no"><b>✗ 틀렸다면 보일 신호{inf}</b>{ul(v["refute"])}</div></div>')
+        chips = {}
+        for x in v["sources"]:
+            chips.setdefault(f'{x["channel"]} {x["time"][5:10].replace("-", "/")} {x["time"][11:16]}', x["link"])
+        srcs = "".join(f'<a href="{e(link, quote=True)}" target="_blank">{e(label)} ↗</a>'
+                       for label, link in chips.items())
+        cards.append(f'<div class="bv-card"><div class="bv-tags">{tags}</div>'
+                     f'<div class="sm-title">{e(v["title"])}</div><div class="sm-body">{e(v["thesis"])}</div>'
+                     f'{vs}{ev}{sig}<div class="sm-src">{srcs}</div></div>')
+    st.html(_SUMMARY_CSS + _VIEWS_CSS
+            + (f'<div class="sm-head">{e(payload["headline"])}</div>' if payload.get("headline") else "")
+            + f'<div class="sm-grid">{"".join(cards)}</div>')
+
+
 def _ago(ts: pd.Timestamp, now: pd.Timestamp) -> str:
     sec = (now - ts).total_seconds()
     if sec < 3600:
