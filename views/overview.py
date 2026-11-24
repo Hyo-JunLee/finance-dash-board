@@ -55,27 +55,54 @@ head_l.caption(f"조회 시각 {datetime.now():%Y-%m-%d %H:%M} (KST) · 카드 �
                f"막대 = 1년 최저\\~최고 중 현재 위치 · 차트 색 = 선택 기간 방향 · ⚡ = 평소 하루 변동의 {Z_ALERT:.0f}배 이상")
 period = head_r.segmented_control("차트 기간", list(PERIODS), default="3개월") or "3개월"
 
-# ── 아침 인사이트 (평일 한화 아침 시황 요약 · 토요일·공휴일 자체 생성, 1~2문장) ──────
-insight = load_summary(config.INSIGHT_FILE)
-if insight and insight.get("lines"):
-    made = pd.Timestamp(insight["generated_at"])
-    today = datetime.now().date()
-    # 일요일엔 토요일 것을 그대로 두므로 '오늘 것 아님'으로 보지 않는다
-    stale = made.date() != today and not (today.weekday() == 6 and (today - made.date()).days == 1)
+# ── 아침 시황 (원문 카드, AI 없음): 월~금 한화 · 토 @ehdwl FICC · 일 토요일 것 ──────
+def _esc(text: str) -> str:
+    return text.replace("$", "\\$").replace("~", "\\~")  # 달러·물결이 수식·취소선으로 바뀌지 않게
+
+
+def _morning_brief() -> None:
+    from data.morning_brief import HANWHA_KINDS, load_brief, numbers_line, plan
+    kind, day = plan(datetime.now())
+    brief = load_brief(kind, day)
     with st.container(border=True):
-        st.markdown(f"**☀️ 아침 인사이트** · {made:%m/%d %H:%M}" + (" :orange[(오늘 것 아님)]" if stale else ""))
-        st.markdown("  \n".join(insight["lines"]).replace("$", "\\$").replace("~", "\\~"))  # 달러·물결이 수식·취소선으로 바뀌지 않게
-        if insight.get("watch"):
-            st.markdown(f"👀 **오늘 볼 것**: {insight['watch']}")
-        if insight.get("source") == "hanwha":
-            links = " · ".join(f"[{x['title']}]({x['link']})" for x in insight.get("sources", []))
-            note = f"출처: 한화투자증권 리서치 텔레그램 {links} · AI(Claude)가 원문을 1~2문장으로 요약 · 투자 권유가 아닙니다"
+        if kind == "hanwha":
+            cards = brief.get("cards") or {}
+            st.markdown(f"**☀️ 아침 시황** · {day:%m/%d} · 한화투자증권 리서치 (원문)")
+            if not cards:
+                st.markdown(_esc(numbers_line()))
+                st.caption("한화 아침 시황 원문 대기 중 (보통 08:05\\~08:50 게시, 공휴일엔 없음) · 위 숫자는 대시보드 데이터"
+                           + (f" · :orange[채널 읽기 실패: {brief['error'][:80]}]" if brief.get("error") else ""))
+                return
+            for col, k in zip(st.columns(len(HANWHA_KINDS), gap="small"), HANWHA_KINDS):
+                with col:
+                    c = cards.get(k)
+                    if c is None:
+                        st.markdown(f"**{k}**")
+                        st.caption("아직 게시 전")
+                        continue
+                    st.markdown(f"**{k}**  \n" + "  \n".join(f"`{_esc(n)}`" for n in c["numbers"]))
+                    if not config.PUBLIC_MODE:  # 공개 배포에선 원문 전체를 싣지 않는다 (저작권)
+                        st.markdown(f"<small>{_esc(c['comment'])}</small>", unsafe_allow_html=True)
+                    st.caption(f"[원문 · {c['time']:%H:%M}]({c['link']})")
         else:
-            note = (f"근거: {' · '.join(insight.get('basis', []))} · 한화 아침 시황이 없는 날(토요일·공휴일)이라 "
-                    "AI(Claude)가 대시보드 데이터만으로 쓴 해석이며 투자 권유가 아닙니다")
-        if insight.get("unverified_numbers"):
-            note += f" · :orange[데이터에서 확인되지 않은 숫자: {', '.join(insight['unverified_numbers'])}]"
-        st.caption(note)
+            f = brief.get("ficc")
+            st.markdown(f"**☀️ 주말 시황** · 금요일 미국장 마감  \n{_esc(numbers_line())}")
+            if not f:
+                st.caption("@ehdwl FICC 원문 대기 중 (보통 토요일 06:30경 게시) · 위 숫자는 대시보드 데이터"
+                           + (f" · :orange[채널 읽기 실패: {brief['error'][:80]}]" if brief.get("error") else ""))
+                return
+            st.markdown(f"**FICC: {_esc(f['title'])}**")
+            if not config.PUBLIC_MODE:
+                for para in f["first"]:
+                    st.markdown(f"<small>{_esc(para)}</small>", unsafe_allow_html=True)
+                if f["rest"]:
+                    with st.expander("유가·금·원자재·농산물 더 보기"):
+                        for para in f["rest"]:
+                            st.markdown(f"<small>{_esc(para)}</small>", unsafe_allow_html=True)
+            st.caption(f"[원문 · {f['time']:%m/%d %H:%M}]({f['link']}) · 숫자 줄은 대시보드 데이터")
+
+
+_morning_brief()
 cutoff = pd.Timestamp(datetime.now() - timedelta(days=PERIODS[period]))
 
 # ── 요약 카드 (자산군별) ─────────────────────────────

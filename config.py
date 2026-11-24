@@ -80,9 +80,4 @@ TTL_TELEGRAM = 60 * 10
 SUMMARY_FILE = CACHE_DIR / "telegram_summary.json"
 NEWS_SUMMARY_FILE = CACHE_DIR / "news_summary.json"
 BUYSIDE_SUMMARY_FILE = CACHE_DIR / "buyside_summary.json"
-INSIGHT_FILE = CACHE_DIR / "morning_insight.json"  # 아침 08:30 실행에서만 갱신
-# 평일 아침 인사이트 원천: 한화 리서치 전략 채널의 ★ 채권·주식·환율 아침 시황 (08:05~08:50경 게시)
-MORNING_BRIEF_CHANNEL = "hanwhastrategy"
-MORNING_BRIEF_KINDS = ("주식", "채권", "환율")
-MORNING_BRIEF_DEADLINE = (9, 30)  # 이 시각(KST)까지 안 올라오면 대시보드 데이터로 자체 생성
 BOND_VIEW_FILE = CACHE_DIR / "bond_view.json"      # 10년물 AI 판단, 아침 08:30 실행에서만 갱신

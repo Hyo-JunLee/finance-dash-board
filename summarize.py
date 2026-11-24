@@ -3,13 +3,7 @@
 1) 텔레그램 리서치 6개 채널 최근 24시간 글 → 채권·매크로 논점 3~5개
 2) 뉴스 헤드라인 최근 12시간 → 국내·해외 이슈 각 4~5개 (기사 수로 화제성 표시)
 3) 바이사이드 관점 5개 채널 최근 24시간 글 → '무엇이 일어났나'가 아니라 논지·시장 반영과의 차이·확인/반증 신호
-4) 아침 인사이트 (08:30 실행에서만, 또는 --insight)
-   - 평일: 한화 리서치 전략 채널(@hanwhastrategy)의 ★ 채권·주식·환율 아침 시황 3개를 1~2문장으로 요약
-     (08:05~08:50경 게시 → 09:30까지 10분 간격으로 기다림)
-   - 토요일·공휴일·09:30까지 안 올라온 날: 대시보드 데이터를 엮은 자체 생성 1~2문장 (금요일 미국장은 토요일에만 자체 생성)
-   - 일요일: 만들지 않고 토요일 것을 그대로 둔다
-   - 어느 쪽이든 숫자는 넘겨준 원문·데이터에 있는 값만 (대조해서 없으면 표시)
-5) 10년물 판단 (08:30, 인사이트 앞) → 규칙 기반 분해를 근거로 받아 맥락까지 보고 쉬운 말로 판단 + 규칙과 일치 여부 기록
+4) 10년물 판단 (08:30 실행에서만, 또는 --insight) → 규칙 기반 분해를 근거로 받아 맥락까지 보고 쉬운 말로 판단 + 규칙과 일치 여부 기록
 
 - API 키 대신 이 맥에 로그인된 Claude Code(`claude -p`)를 써서 별도 결제 없이 구독 사용 한도에서 처리
 - 도구는 모두 끄고(--tools ""), MCP도 불러오지 않으며(--strict-mcp-config), 정해진 JSON 형식으로만 받는다
@@ -310,24 +304,7 @@ def summarize_buyside() -> None:
     log.info(f"[바이사이드] 관점 {len(views)}개 · {meta.get('duration_ms', 0) / 1000:.0f}초")
 
 
-# ── 4) 아침 인사이트 ─────────────────────────────────
-INSIGHT_SYSTEM = """너는 매크로·채권 운용역의 아침 회의를 준비하는 애널리스트다. 아래 대시보드 데이터만 보고
-오늘 아침 가장 중요한 인사이트를 한국어 1~2문장으로 쓴다.
-
-규칙
-- 어제 일어난 일을 나열하지 않는다. 여러 데이터를 엮어 '무엇이 달라졌고 그래서 오늘 무엇이 중요한지'를 쓴다.
-  예: 금리 변화의 성격(분해 판정) × 수급 상태 × 오늘 일정, 또는 가격과 관점의 어긋남.
-- 데이터가 서로 어긋나면(예: 금리는 크게 움직였는데 수급은 조용함) 그 점이 인사이트가 될 수 있다.
-- 숫자는 아래 데이터에 있는 값만 그대로 쓴다. 새로 계산하거나 반올림을 바꾼 숫자를 만들지 않는다.
-- 단정하지 않는다("가능성", "해석 가능", "주목"). 투자 권유를 하지 않는다.
-- lines: 1~2문장, 각 100자 이내. watch: 오늘 확인할 것 하나(30자 이내).
-- basis: 근거로 쓴 데이터 항목 이름 2~4개 (예: "미국 10년물", "10년물 분해", "수급·포지션", "일정: 소매판매")."""
-INSIGHT_SCHEMA = {
-    "type": "object",
-    "properties": {"lines": {"type": "array", "items": {"type": "string"}},
-                   "watch": {"type": "string"}, "basis": {"type": "array", "items": {"type": "string"}}},
-    "required": ["lines", "watch", "basis"], "additionalProperties": False,
-}
+# ── 공용: 10년물 판단에 넣는 일정·지표 텍스트 ─────────────
 _NUM = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
 
@@ -348,167 +325,7 @@ def _recent_text(n: int = 8) -> str:
                      for _, x in r.iterrows())
 
 
-def _insight_data() -> str:
-    """대시보드가 이미 계산하는 값을 텍스트로 모은다. 섹션마다 실패해도 나머지는 진행."""
-    from data import bonds as b
-    from data import flow_data as fd
-    from data import flow_regime as fr
-    from data.bond_attribution import LEADER_LABELS, attribute, curve_check
-    from data.econ_calendar import get_recent_indicators, get_week_calendar
-    from data.market import SUMMARY_ITEMS, get_snapshot
-    from data.news import load_news_summary
-    from data.rates import NOMINAL, get_treasury_curve
-    from data.telegram import load_summary
-
-    out = [f"작성 시각: {datetime.now():%Y-%m-%d %H:%M} KST"]
-
-    def section(title, fn):
-        try:
-            out.append(f"\n[{title}]\n" + fn())
-        except Exception as e:
-            log.warning(f"[인사이트] {title} 실패: {e}")
-
-    def market():
-        rows = []
-        for key in SUMMARY_ITEMS:
-            s = get_snapshot(key)
-            rate = s["kind"] in ("rate", "spread")
-            unit = "bp" if rate else "%"
-            chg = s["chg"] * 100 if rate else s["pct"]
-            per = " ".join(f"{k} {v:+.1f}{unit}" for k, v in s.get("periods", {}).items())
-            rows.append(f"- {s['label']}: {s['last']:,.2f}{'%' if rate else ''} | 전일 대비 {chg:+.1f}{unit} | "
-                        f"z {s['z']:+.1f} | {per} | 기준 {s['asof']:%m/%d %H:%M}")
-        return "(z = 오늘 변화 / 1년 일간 표준편차)\n" + "\n".join(rows)
-
-    def bonds():
-        from data.bond_story import WINDOWS, rule_snapshot, snapshot_text
-        rows = [snapshot_text(rule_snapshot(w)) for w in WINDOWS]
-        ai = load_summary(config.BOND_VIEW_FILE)  # 같은 아침에 먼저 만든 10년물 AI 판단
-        if ai and ai["generated_at"][:10] == datetime.now().strftime("%Y-%m-%d"):
-            rows += [f"- AI 판단({w}): {v['headline']}" for w, v in ai["windows"].items()]
-        return "\n".join(rows)
-
-    def calendar():
-        return _calendar_text()
-
-    def recent():
-        return _recent_text()
-
-    def views():
-        rows = []
-        for name, data, key in (("리서치", load_summary(), "themes"), ("바이사이드 관점", load_summary(config.BUYSIDE_SUMMARY_FILE), "views"),
-                                ("뉴스 이슈", load_news_summary(), "issues")):
-            if data:
-                items = data.get(key, [])[:5]
-                rows.append(f"- {name} ({data['generated_at']}): {data.get('headline', '')} / "
-                            + " / ".join(x["title"] for x in items))
-        return "\n".join(rows)
-
-    section("시장 (최신값)", market)
-    section("미국 10년물 분해·수급", bonds)
-    section("향후 40시간 미국 주요 일정 (KST)", calendar)
-    section("최근 발표 지표 (예상 대비)", recent)
-    section("오늘 아침 요약들 (제목만)", views)
-    return "\n".join(out)
-
-
-BRIEF_SYSTEM = """너는 매크로·채권 운용역의 아침 회의를 준비하는 애널리스트다. 증권사 리서치의 오늘 아침 시황 글
-(미국 주식·미국 채권·환율)을 읽고, 바쁜 사람이 한눈에 볼 아침 인사이트를 한국어 1~2문장으로 쓴다.
-
-규칙
-- 세 글을 따로 나열하지 않는다. 간밤 미국장을 움직인 핵심 원인 하나를 중심으로 주식·금리·환율을 엮는다.
-- 첫 문장: 주식·환율 중심. 둘째 문장: 미 국채 2년물·10년물.
-- [필수] 채권 글에 2년물·10년물(또는 단기·장기 금리)이 왜 움직였는지 이유가 적혀 있으면, 둘째 문장에 그 이유를 반드시 넣는다.
-  2년물과 10년물의 이유가 다르면 각각 쓴다(예: 단기는 위험선호로 반등, 장기는 유가 하락에 하락).
-  이유가 적혀 있지 않으면 지어내지 않고 움직임만 쓴다.
-- 변화가 ±0.5bp 미만(예: -0.0bp, +0.3bp)이면 '상승·하락'이 아니라 '보합'으로 쓴다. 원문이 '하락'이라고 해도 수치가 이 범위면 보합.
-  형식 예: "국채 2년물은 <원문의 단기 금리 이유>로 <수치>(<변화>) …했지만, 10년물은 <원문의 장기 금리 이유>에 <수치>(<변화>) …"
-- 원문에 없는 사실·원인·전망을 덧붙이지 않는다. 이유는 그 금리를 다룬 채권 글에서 가져오고, 다른 글이나 일정에서 끌어오지 않는다.
-- 숫자는 원문에 있는 값만 그대로 쓴다(새로 계산하거나 반올림을 바꾸지 않는다). 핵심 숫자 2~5개만.
-- lines: 정확히 2문장. 첫 문장 110자 이내, 둘째 문장(국채) 140자 이내.
-- watch: 오늘 확인할 것 하나(30자 이내). '향후 일정'에 있는 것 중에서 고르고, 없으면 원문에서 언급된 것을 쓴다.
-- basis: 근거로 쓴 글 종류(주식/채권/환율)와 일정 항목 이름 2~4개."""
-
-
-def _morning_brief_posts() -> dict[str, dict] | None:
-    """오늘 날짜의 ★ 주식·채권·환율 아침 시황 글 {종류: 글}. 세 개가 다 있어야 반환."""
-    today = datetime.now()
-    posts = fetch_since(config.MORNING_BRIEF_CHANNEL, pd.Timestamp(today.date()))
-    found = {}
-    for p in posts:
-        m = re.match(r"\s*★\s*(\S+)\s*아침\s*시황\s*\((\d{1,2})/(\d{1,2})\)", p["text"] or "")
-        if m and m.group(1) in config.MORNING_BRIEF_KINDS and (int(m.group(2)), int(m.group(3))) == (today.month, today.day):
-            found.setdefault(m.group(1), p)
-    return found if len(found) == len(config.MORNING_BRIEF_KINDS) else None
-
-
-def _wait_morning_brief() -> dict[str, dict] | None:
-    """마감 시각(09:30)까지 10분 간격으로 확인. 마감이 지났으면 한 번만 확인."""
-    import time
-    h, m = config.MORNING_BRIEF_DEADLINE
-    deadline = datetime.now().replace(hour=h, minute=m, second=0, microsecond=0)
-    while True:
-        try:
-            found = _morning_brief_posts()
-        except Exception as e:
-            log.warning(f"[인사이트] 아침 시황 수집 실패: {e}")
-            found = None
-        if found or datetime.now() >= deadline:
-            return found
-        log.info("[인사이트] 아침 시황이 아직 다 올라오지 않음 — 10분 뒤 다시 확인")
-        time.sleep(min(600, max(30, (deadline - datetime.now()).total_seconds())))
-
-
-def _verify_numbers(source_text: str, texts: list[str]) -> list[str]:
-    source = {n.replace(",", "") for n in _NUM.findall(source_text)}  # 숫자 단위로 비교 (13.2 안의 3.2 같은 부분 일치 방지)
-    return sorted({n for t in texts for n in _NUM.findall(t) if n.replace(",", "") not in source})
-
-
-def summarize_morning_brief(posts: dict[str, dict]) -> None:
-    channel = config.MORNING_BRIEF_CHANNEL
-    text = "\n\n".join(f"[{k} 아침 시황 · {posts[k]['time']:%m/%d %H:%M}]\n{posts[k]['text']}" for k in config.MORNING_BRIEF_KINDS)
-    text += "\n\n[향후 40시간 미국 주요 일정 (KST)]\n" + _calendar_text()
-    data, meta = run_claude(BRIEF_SYSTEM, INSIGHT_SCHEMA, text, "아래 아침 시황 글로 오늘 아침 인사이트를 규칙에 따라 JSON으로만 답하라.")
-    lines = [x.strip() for x in data.get("lines", []) if x.strip()][:2]
-    unverified = _verify_numbers(text, lines + [data.get("watch", "")])
-    payload = {"generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "source": "hanwha", "lines": lines,
-               "watch": data.get("watch", "").strip(), "basis": [x.strip() for x in data.get("basis", []) if x.strip()],
-               "sources": [{"kind": k, "title": f"{k} 아침 시황", "link": posts[k]["link"]} for k in config.MORNING_BRIEF_KINDS],
-               "channel": channel, "unverified_numbers": unverified, "input": text, "model": MODEL, "meta": meta}
-    save(config.INSIGHT_FILE, "morning_insights.jsonl", payload)
-    log.info(f"[인사이트] 한화 아침 시황 요약 {len(lines)}문장 · 확인 안 된 숫자 {unverified or '없음'} · "
-             f"{meta.get('duration_ms', 0) / 1000:.0f}초")
-
-
-def morning_insight() -> None:
-    """평일 = 한화 아침 시황 요약, 토요일·공휴일·지연 = 자체 생성, 일요일 = 토요일 것 유지."""
-    wd = datetime.now().weekday()
-    if wd == 6:
-        log.info("[인사이트] 일요일 — 토요일 인사이트를 그대로 둡니다")
-        return
-    if wd < 5:
-        posts = _wait_morning_brief()
-        if posts:
-            summarize_morning_brief(posts)
-            return
-        log.warning("[인사이트] 마감 시각까지 한화 아침 시황 3개가 다 올라오지 않음 (공휴일?) — 대시보드 데이터로 자체 생성")
-    summarize_insight()
-
-
-def summarize_insight() -> None:
-    text = _insight_data()
-    data, meta = run_claude(INSIGHT_SYSTEM, INSIGHT_SCHEMA, text, "아래 데이터로 오늘 아침 인사이트를 규칙에 따라 JSON으로만 답하라.")
-    lines = [x.strip() for x in data.get("lines", []) if x.strip()][:2]
-    # 숫자 검증: 넘겨준 데이터에 없는 숫자는 표시해 둔다 (지어낸 숫자 방지)
-    unverified = _verify_numbers(text, lines + [data.get("watch", "")])
-    payload = {"generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "source": "dashboard", "lines": lines,
-               "watch": data.get("watch", "").strip(), "basis": [x.strip() for x in data.get("basis", []) if x.strip()],
-               "unverified_numbers": unverified, "input": text, "model": MODEL, "meta": meta}
-    save(config.INSIGHT_FILE, "morning_insights.jsonl", payload)
-    log.info(f"[인사이트] {len(lines)}문장 · 확인 안 된 숫자 {unverified or '없음'} · {meta.get('duration_ms', 0) / 1000:.0f}초")
-
-
-# ── 5) 10년물 판단 (채권 › 곡선 분해 맨 위) ──────────────
+# ── 4) 10년물 판단 (채권 › 곡선 분해 맨 위) ──────────────
 BOND_SYSTEM = """너는 미국 국채 애널리스트이자 설명을 잘하는 선생님이다. 독자는 금융을 공부하는 사람이다.
 '미국 10년물 금리가 왜 움직였나'를 기간별(1주, 1개월)로 판단해 쉬운 한국어로 쓴다.
 
@@ -631,7 +448,8 @@ def main() -> int:
     failed = []
     jobs = [summarize_telegram, summarize_news, summarize_buyside]
     if datetime.now().hour < 11 or "--insight" in sys.argv:  # 하루 3회 중 아침 08:30 실행에서만
-        jobs += [summarize_bond_view, morning_insight]  # 앞의 요약 결과도 재료로 쓰므로 마지막
+        jobs += [summarize_bond_view]  # 앞의 요약 결과도 재료로 쓰므로 마지막
+    # 아침 인사이트는 AI 없이 화면에서 원문 카드로 보여준다 (data/morning_brief.py)
     for job in jobs:
         try:
             job()
