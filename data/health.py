@@ -149,11 +149,12 @@ def check_telegram():
     oldest_h, oldest = max(ages)
     status = OK if oldest_h <= 15 else WARN if oldest_h <= 30 else FAIL
     for label, path in (("아침 인사이트", config.INSIGHT_FILE), ("10년물 판단", config.BOND_VIEW_FILE)):
-        try:  # 아침 08:30 하루 1회라 26시간까지 정상
+        try:  # 아침 08:30 하루 1회라 26시간까지 정상 (아침 인사이트는 일요일을 건너뛰어 토요일 것은 50시간까지)
             made = datetime.fromisoformat(json.loads(path.read_text())["generated_at"])
             hours = (datetime.now() - made).total_seconds() / 3600
             parts.append(f"{label} {hours:.0f}시간 전")
-            if hours > 26 and status == OK:
+            limit = 50 if path == config.INSIGHT_FILE and made.weekday() == 5 else 26
+            if hours > limit and status == OK:
                 status = WARN
         except (FileNotFoundError, ValueError, KeyError):
             parts.append(f"{label} 없음")

@@ -55,17 +55,24 @@ head_l.caption(f"조회 시각 {datetime.now():%Y-%m-%d %H:%M} (KST) · 카드 �
                f"막대 = 1년 최저\\~최고 중 현재 위치 · 차트 색 = 선택 기간 방향 · ⚡ = 평소 하루 변동의 {Z_ALERT:.0f}배 이상")
 period = head_r.segmented_control("차트 기간", list(PERIODS), default="3개월") or "3개월"
 
-# ── 아침 인사이트 (08:30 AI, 대시보드 데이터를 엮은 1~2문장) ──────
+# ── 아침 인사이트 (평일 한화 아침 시황 요약 · 토요일·공휴일 자체 생성, 1~2문장) ──────
 insight = load_summary(config.INSIGHT_FILE)
 if insight and insight.get("lines"):
     made = pd.Timestamp(insight["generated_at"])
-    stale = made.date() != datetime.now().date()
+    today = datetime.now().date()
+    # 일요일엔 토요일 것을 그대로 두므로 '오늘 것 아님'으로 보지 않는다
+    stale = made.date() != today and not (today.weekday() == 6 and (today - made.date()).days == 1)
     with st.container(border=True):
         st.markdown(f"**☀️ 아침 인사이트** · {made:%m/%d %H:%M}" + (" :orange[(오늘 것 아님)]" if stale else ""))
         st.markdown("  \n".join(insight["lines"]).replace("$", "\\$").replace("~", "\\~"))  # 달러·물결이 수식·취소선으로 바뀌지 않게
         if insight.get("watch"):
             st.markdown(f"👀 **오늘 볼 것**: {insight['watch']}")
-        note = f"근거: {' · '.join(insight.get('basis', []))} · AI(Claude)가 대시보드 데이터만으로 쓴 해석이며 투자 권유가 아닙니다"
+        if insight.get("source") == "hanwha":
+            links = " · ".join(f"[{x['title']}]({x['link']})" for x in insight.get("sources", []))
+            note = f"출처: 한화투자증권 리서치 텔레그램 {links} · AI(Claude)가 원문을 1~2문장으로 요약 · 투자 권유가 아닙니다"
+        else:
+            note = (f"근거: {' · '.join(insight.get('basis', []))} · 한화 아침 시황이 없는 날(토요일·공휴일)이라 "
+                    "AI(Claude)가 대시보드 데이터만으로 쓴 해석이며 투자 권유가 아닙니다")
         if insight.get("unverified_numbers"):
             note += f" · :orange[데이터에서 확인되지 않은 숫자: {', '.join(insight['unverified_numbers'])}]"
         st.caption(note)
