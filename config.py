@@ -81,3 +81,4 @@ SUMMARY_FILE = CACHE_DIR / "telegram_summary.json"
 NEWS_SUMMARY_FILE = CACHE_DIR / "news_summary.json"
 BUYSIDE_SUMMARY_FILE = CACHE_DIR / "buyside_summary.json"
 INSIGHT_FILE = CACHE_DIR / "morning_insight.json"  # 아침 08:30 실행에서만 갱신
+BOND_VIEW_FILE = CACHE_DIR / "bond_view.json"      # 10년물 AI 판단, 아침 08:30 실행에서만 갱신

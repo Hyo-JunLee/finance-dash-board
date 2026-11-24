@@ -56,7 +56,7 @@ def collect_calendar() -> None:
     if df.empty:
         return
     df["date_kst"] = pd.to_datetime(df["date"], utc=True).dt.tz_convert("Asia/Seoul").dt.strftime("%Y-%m-%d %H:%M")
-    df["title_ko"] = df["title"].map(lambda t: econ_calendar.TITLE_KO.get(t, t))
+    df["title_ko"] = df["title"].map(econ_calendar.title_ko)
     df = df[["date_kst", "title", "title_ko", "impact", "forecast", "previous"]]
     n = upsert(OUT / "econ_calendar.csv", df, ["date_kst", "title"], ["date_kst"])
     log.info(f"경제지표 일정: 이번 주 {len(df)}건, 누적 {n}건")

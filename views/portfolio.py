@@ -224,7 +224,7 @@ with tabs[3]:
         c[1].metric(f"{pf.BENCHMARK} (배당 재투자)", f"{spy:+.2f}%", border=True)
         c[2].metric("초과수익", f"{twr - spy:+.2f}%p",
                     delta_color="off", border=True)
-        st.caption(f"기간: {start:%Y-%m-%d} (첫 거래일) ~ {perf.index[-1]:%Y-%m-%d}")
+        st.caption(f"기간: {start:%Y-%m-%d} (첫 거래일) \\~ {perf.index[-1]:%Y-%m-%d}")
         show_chart(line_chart({"내 포트폴리오": perf["포트폴리오"], f"{pf.BENCHMARK}": perf[pf.BENCHMARK]},
                               "누적 수익률", unit="%", hline=0, height=340))
         show_chart(line_chart({"평가금액": perf["평가금액"]}, "평가금액 ($)", height=260))

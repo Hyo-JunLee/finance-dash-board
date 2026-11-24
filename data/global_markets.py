@@ -1,4 +1,4 @@
-"""해외 증시: 주요 지수, 섹터·스타일 ETF, S&P 500 대형주 히트맵 (Yahoo 일괄 조회)."""
+"""미국 증시: 주요 지수, 섹터·스타일 ETF, S&P 500 대형주 히트맵 (Yahoo 일괄 조회)."""
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -15,24 +15,12 @@ INDICES = {
     "^IXIC":     ("나스닥",         "미국"),
     "^DJI":      ("다우",           "미국"),
     "^RUT":      ("러셀 2000",      "미국"),
-    "^STOXX50E": ("유로스톡스 50",  "유럽"),
-    "^GDAXI":    ("독일 DAX",       "유럽"),
-    "^FTSE":     ("영국 FTSE 100",  "유럽"),
-    "^FCHI":     ("프랑스 CAC 40",  "유럽"),
-    "^N225":     ("닛케이 225",     "아시아"),
-    "^HSI":      ("항셍",           "아시아"),
-    "000001.SS": ("상하이 종합",    "아시아"),
-    "^TWII":     ("대만 가권",      "아시아"),
 }
 
 # 거래소 정규장 마감 시각 (현지). 시간대 변환으로 서머타임 자동 반영
 CLOSE_TIMES = {
     "^GSPC": ("16:00", "America/New_York"), "^IXIC": ("16:00", "America/New_York"),
     "^DJI": ("16:00", "America/New_York"), "^RUT": ("16:00", "America/New_York"),
-    "^STOXX50E": ("17:30", "Europe/Berlin"), "^GDAXI": ("17:30", "Europe/Berlin"),
-    "^FTSE": ("16:30", "Europe/London"), "^FCHI": ("17:30", "Europe/Paris"),
-    "^N225": ("15:30", "Asia/Tokyo"), "^HSI": ("16:00", "Asia/Hong_Kong"),
-    "000001.SS": ("15:00", "Asia/Shanghai"), "^TWII": ("13:30", "Asia/Taipei"),
 }
 LIVE_MAX_AGE = pd.Timedelta(minutes=30)  # 이보다 오래된 1분봉은 장 마감으로 본다
 
@@ -64,6 +52,26 @@ HEATMAP_STOCKS = {
     "부동산": ["PLD", "AMT"],
 }
 STOCK_SECTOR = {t: sec for sec, ts in HEATMAP_STOCKS.items() for t in ts}
+
+# 주요 종목 시세표: 히트맵 종목 + 추가 종목 (티커 → 섹터 표시)
+EXTRA_QUOTES = {"TSM": "반도체 (ADR)", "SOXL": "반도체 3배 레버리지 ETF", "SOXS": "반도체 3배 인버스 ETF"}
+KR_NAMES = {
+    "AAPL": "애플", "MSFT": "마이크로소프트", "NVDA": "엔비디아", "AVGO": "브로드컴", "ORCL": "오라클",
+    "CRM": "세일즈포스", "AMD": "AMD", "ADBE": "어도비", "CSCO": "시스코", "ACN": "액센추어", "IBM": "IBM",
+    "QCOM": "퀄컴", "TXN": "텍사스 인스트루먼트", "INTU": "인튜이트", "NOW": "서비스나우", "AMAT": "어플라이드 머티리얼즈",
+    "MU": "마이크론", "PLTR": "팔란티어", "GOOGL": "알파벳 A", "META": "메타", "NFLX": "넷플릭스",
+    "TMUS": "T-모바일 US", "DIS": "디즈니", "T": "AT&T", "VZ": "버라이즌", "AMZN": "아마존", "TSLA": "테슬라",
+    "HD": "홈디포", "MCD": "맥도날드", "BKNG": "부킹 홀딩스", "LOW": "로우스", "NKE": "나이키", "SBUX": "스타벅스",
+    "TJX": "TJX", "BRK-B": "버크셔 해서웨이 B", "JPM": "JP모건", "V": "비자", "MA": "마스터카드",
+    "BAC": "뱅크오브아메리카", "WFC": "웰스파고", "GS": "골드만삭스", "MS": "모건스탠리", "AXP": "아메리칸 익스프레스",
+    "BLK": "블랙록", "C": "씨티그룹", "LLY": "일라이 릴리", "UNH": "유나이티드헬스", "JNJ": "존슨앤드존슨",
+    "ABBV": "애브비", "MRK": "머크", "TMO": "써모피셔", "ABT": "애보트", "ISRG": "인튜이티브 서지컬", "AMGN": "암젠",
+    "PFE": "화이자", "WMT": "월마트", "COST": "코스트코", "PG": "P&G", "KO": "코카콜라", "PEP": "펩시코",
+    "PM": "필립모리스", "XOM": "엑슨모빌", "CVX": "셰브론", "COP": "코노코필립스", "GE": "GE 에어로스페이스",
+    "CAT": "캐터필러", "RTX": "RTX", "UBER": "우버", "HON": "허니웰", "BA": "보잉", "UNP": "유니언 퍼시픽",
+    "DE": "디어", "LIN": "린데", "SHW": "셔윈윌리엄스", "NEE": "넥스트에라 에너지", "SO": "서던", "PLD": "프롤로지스",
+    "AMT": "아메리칸 타워", "TSM": "TSMC", "SOXL": "디렉시온 반도체 3X", "SOXS": "디렉시온 반도체 인버스 3X",
+}
 
 # 수익률 기간: (라벨, pandas offset 또는 특수값)
 PERIODS = {"1일": "1D", "1주": pd.DateOffset(weeks=1), "1개월": pd.DateOffset(months=1),
@@ -166,7 +174,7 @@ def apply_market_status(closes: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
         if s.empty:
             continue
         hit = live.get(t)
-        hhmm, tz = CLOSE_TIMES.get(t, ("16:00", "UTC"))
+        hhmm, tz = CLOSE_TIMES.get(t, ("16:00", "America/New_York"))  # 개별 종목·ETF도 뉴욕 정규장
         # 1분봉이 최근이어도 현지 마감 시각이 지났으면 마감 (지연 시세가 장중으로 보이지 않게)
         today_close = pd.Timestamp(f"{now.tz_convert(tz).date()} {hhmm}").tz_localize(tz)
         if hit and now - hit[1] <= LIVE_MAX_AGE and now < today_close:
@@ -181,3 +189,105 @@ def apply_market_status(closes: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
             status[t] = ("마감", close_at.tz_convert("Asia/Seoul").tz_localize(None))
     closes = closes.sort_index()
     return closes, pd.DataFrame.from_dict(status, orient="index", columns=["상태", "기준 시각"])
+
+
+NY = "America/New_York"
+PRE, REGULAR, POST, POST_END = "04:00", "09:30", "16:00", "20:00"  # 뉴욕 현지 세션 경계
+EXT_LIVE_AGE = pd.Timedelta(minutes=30)  # 마지막 시간외 봉이 이보다 오래되면 '진행 중'으로 보지 않음
+
+
+def _download_filled(tickers: list[str], **kw) -> pd.DataFrame:
+    """yf.download 일괄 조회. Yahoo가 여러 종목을 한 번에 받을 때 일부 종목을 비워 보내는 경우가 있어
+    빈 종목만 한 번 더 받아 채운다."""
+    def get(ts):
+        df = yf.download(ts, progress=False, threads=True, **kw)["Close"]
+        return df if isinstance(df, pd.DataFrame) else df.to_frame(ts[0])
+    df = get(tickers)
+    missing = [t for t in tickers if t not in df or df[t].isna().all()]
+    if missing:
+        try:
+            df = df.drop(columns=[t for t in missing if t in df]).join(get(missing), how="outer")
+        except Exception:
+            pass
+    return df
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _extended_bars(tickers: tuple[str, ...]) -> pd.DataFrame:
+    """시간외 포함 5분봉 (최근 5일). 인덱스 = 뉴욕 시각."""
+    df = _download_filled(list(tickers), period="5d", interval="5m", prepost=True, auto_adjust=False)
+    df.index = df.index.tz_convert(NY)
+    return df
+
+
+def market_session(now: pd.Timestamp) -> str:
+    """뉴욕 시계 기준 현재 세션: 프리마켓 / 정규장 / 애프터마켓 / 휴장 (거래소 공휴일은 반영하지 않음)."""
+    now = now.tz_convert(NY)
+    hhmm = f"{now:%H:%M}"
+    if now.weekday() >= 5 or not PRE <= hhmm < POST_END:
+        return "휴장"
+    return "프리마켓" if hhmm < REGULAR else "정규장" if hhmm < POST else "애프터마켓"
+
+
+def extended_quote(bars: pd.Series, daily: pd.Series, now: pd.Timestamp) -> dict | None:
+    """마지막 시간외 체결과 기준 종가 대비 등락률. 마지막 봉이 정규장이면 None.
+    애프터마켓(16:00~20:00)은 그날 정규장 종가 대비, 프리마켓(04:00~09:30)은 전 거래일 정규장 종가 대비.
+    daily: 정규장 일봉 종가(날짜 인덱스), now: 뉴욕 현재 시각."""
+    bars = bars.dropna()
+    if bars.empty or daily.dropna().empty:
+        return None
+    ts, price = bars.index[-1], float(bars.iloc[-1])
+    hhmm, day = f"{ts:%H:%M}", pd.Timestamp(ts.date())
+    daily = daily.dropna()
+    daily = daily[~daily.index.duplicated(keep="last")]
+    if POST <= hhmm < POST_END:
+        session, base = "애프터마켓", daily[daily.index.normalize() <= day]
+    elif PRE <= hhmm < REGULAR:
+        session, base = "프리마켓", daily[daily.index.normalize() < day]
+    else:
+        return None
+    if base.empty:
+        return None
+    base_close = float(base.iloc[-1])
+    return {"session": session, "price": price, "pct": (price / base_close - 1) * 100,
+            "time": ts.tz_convert("Asia/Seoul").tz_localize(None), "live": now - ts <= EXT_LIVE_AGE}
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def quote_table() -> pd.DataFrame:
+    """주요 종목 시세표 (investing.com 스타일): 현재가, 전 거래일 종가 대비 변화·등락률, 상태, 기준 시각(KST).
+    장중이면 1분봉 최신값(최대 15분 지연), 아니면 정규장 종가."""
+    sectors = {**STOCK_SECTOR, **EXTRA_QUOTES}
+    tickers = tuple(sectors)
+    daily = get_closes(tickers, "1mo")
+    missing = [t for t in tickers if t not in daily or daily[t].isna().all()]
+    if missing:  # 일괄 조회에서 비어 온 종목은 다시 받아 채움 (get_closes 캐시에 빈 채로 5분간 남지 않게)
+        try:
+            daily = daily.drop(columns=[t for t in missing if t in daily]).join(
+                _download_filled(missing, period="1mo", auto_adjust=True), how="outer")
+        except Exception:
+            pass
+    closes, status = apply_market_status(daily)
+    shares = get_shares(list(STOCK_SECTOR) + ["TSM"])  # ETF는 시가총액 개념이 없어 제외
+    try:
+        ext_bars = _extended_bars(tickers)
+    except Exception:
+        ext_bars = pd.DataFrame()
+    now = pd.Timestamp.now(tz=NY)
+    session = market_session(now)
+    rows = []
+    for t in tickers:
+        s = closes[t].dropna() if t in closes else pd.Series(dtype=float)
+        if len(s) < 2 or t not in status.index:
+            continue
+        last, prev = float(s.iloc[-1]), float(s.iloc[-2])
+        ext = extended_quote(ext_bars[t], s, now) if t in ext_bars else None
+        # 상태는 종목별 마지막 체결이 아니라 시계로 판정 (시간외에 거래가 뜸한 종목도 세션은 같음)
+        state = {"프리마켓": "🌅 프리마켓", "애프터마켓": "🌙 애프터마켓"}.get(session, status.loc[t, "상태"])
+        rows.append({"종목": KR_NAMES.get(t, t), "티커": t, "섹터": sectors[t], "현재가": last,
+                     "전일 대비": last - prev, "등락률": (last / prev - 1) * 100,
+                     "시간외 가격": ext["price"] if ext else None, "시간외 등락률": ext["pct"] if ext else None,
+                     "시간외 구분": ext["session"] if ext else None, "시간외 시각": ext["time"] if ext else None,
+                     "시가총액($bn)": shares[t] * last / 1e9 if t in shares else None,
+                     "상태": state, "기준 시각": status.loc[t, "기준 시각"]})
+    return pd.DataFrame(rows)

@@ -163,4 +163,4 @@ def summary_text(a: Attribution, common_end: str, panel1_end: str, acm_end: str,
                      f"**{common_end}** 기준으로 다시 계산했습니다 (패널별 수치와 다를 수 있음).")
     else:
         lines.append(f"기간: 두 패널 모두 ~{common_end} 기준.")
-    return "  \n".join(lines)
+    return "  \n".join(lines).replace("~", "\\~")  # 마크다운에서 ~ 두 개가 취소선이 되지 않게

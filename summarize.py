@@ -4,6 +4,7 @@
 2) 뉴스 헤드라인 최근 12시간 → 국내·해외 이슈 각 4~5개 (기사 수로 화제성 표시)
 3) 바이사이드 관점 5개 채널 최근 24시간 글 → '무엇이 일어났나'가 아니라 논지·시장 반영과의 차이·확인/반증 신호
 4) 아침 인사이트 (08:30 실행에서만, 또는 --insight) → 대시보드 데이터를 엮은 1~2문장. 숫자는 넘겨준 데이터에서만
+5) 10년물 판단 (08:30, 인사이트 앞) → 규칙 기반 분해를 근거로 받아 맥락까지 보고 쉬운 말로 판단 + 규칙과 일치 여부 기록
 
 - API 키 대신 이 맥에 로그인된 Claude Code(`claude -p`)를 써서 별도 결제 없이 구독 사용 한도에서 처리
 - 도구는 모두 끄고(--tools ""), MCP도 불러오지 않으며(--strict-mcp-config), 정해진 JSON 형식으로만 받는다
@@ -317,6 +318,23 @@ INSIGHT_SCHEMA = {
 _NUM = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
 
+def _calendar_text(hours: int = 40) -> str:
+    from data.econ_calendar import get_week_calendar
+    cal = get_week_calendar()
+    now = pd.Timestamp.now(tz="Asia/Seoul")
+    cal = cal[(cal["일시(KST)"] >= now) & (cal["일시(KST)"] <= now + pd.Timedelta(hours=hours))
+              & (cal["_impact"].isin(["High", "Medium"]))]
+    return "\n".join(f"- {r['일시(KST)']:%m/%d %H:%M} {r['지표']} ({r['중요도']}) 예상 {r['예상'] or '-'} 이전 {r['이전'] or '-'}"
+                     for _, r in cal.iterrows()) or "- 중요 일정 없음"
+
+
+def _recent_text(n: int = 8) -> str:
+    from data.econ_calendar import get_recent_indicators
+    r = get_recent_indicators().sort_values("발표", ascending=False).head(n)
+    return "\n".join(f"- {x['지표']}: {x['최신']} (예상 {x['예상'] or '-'}, {x['서프라이즈'] or '-'}) 발표 {x['발표']:%m/%d}"
+                     for _, x in r.iterrows())
+
+
 def _insight_data() -> str:
     """대시보드가 이미 계산하는 값을 텍스트로 모은다. 섹션마다 실패해도 나머지는 진행."""
     from data import bonds as b
@@ -350,42 +368,18 @@ def _insight_data() -> str:
         return "(z = 오늘 변화 / 1년 일간 표준편차)\n" + "\n".join(rows)
 
     def bonds():
-        rb, acm = b.real_bei_10y(), b.acm_10y()
-        end = min(rb.index[-1], acm.index[-1])
-        zs, _ = fd.stress_series(config.FLOW_Z_WINDOW_DAYS)
-        rows = []
-        for label, off in (("1주", pd.DateOffset(weeks=1)), ("1개월", pd.DateOffset(months=1))):
-            since = end - off
-            rc, ac = b.change_bp(rb[rb.index <= end], since), b.change_bp(acm[acm.index <= end], since)
-            a = attribute(rc["실질 10년"], rc["기대인플레(BEI)"], ac["기대 단기금리 경로"], ac["텀 프리미엄"],
-                          config.ATTR_NOISE_BP)
-            curve = get_treasury_curve((since - pd.Timedelta(days=10)).date(), NOMINAL)
-            cc = b.change_bp(curve[curve.index <= end][["2 Yr", "10 Yr", "30 Yr"]], since)
-            _, premium_like = curve_check(cc["2 Yr"], cc["10 Yr"], cc["30 Yr"], config.ATTR_NOISE_BP)
-            peaks = {k: (fr.window_peak(z, since, end) if z is not None else None) for k, z in zs.items()}
-            stress = fr.stress_level({k: (p[0] if p else None) for k, p in peaks.items()},
-                                     config.FLOW_Z_THRESHOLD, config.FLOW_STRESS_COUNT)
-            mismatch = fr.curve_mismatch(a.leader, premium_like, abs(cc["2 Yr"]) >= config.ATTR_NOISE_BP)
-            _, combined = fr.combine(a.leader, abs(a.nominal) >= config.ATTR_NOISE_BP, mismatch, stress["level"])
-            comps = " ".join(f"{k} {v:+.0f}bp" for k, v in a.components.items())
-            rows.append(f"- {label} (~{end:%m/%d}): 10년물 {a.nominal:+.0f}bp, 판정 '{a.verdict}' "
-                        f"(A=정책·성장 기대, C=실질 텀프리미엄, D=인플레 리스크 프리미엄: {comps}) | "
-                        f"수급 스트레스 {stress['level']} (|z|≥{config.FLOW_Z_THRESHOLD:g}: {', '.join(stress['hits']) or '없음'}) | "
-                        f"결합 해석: {combined.replace('**', '')}")
+        from data.bond_story import WINDOWS, rule_snapshot, snapshot_text
+        rows = [snapshot_text(rule_snapshot(w)) for w in WINDOWS]
+        ai = load_summary(config.BOND_VIEW_FILE)  # 같은 아침에 먼저 만든 10년물 AI 판단
+        if ai and ai["generated_at"][:10] == datetime.now().strftime("%Y-%m-%d"):
+            rows += [f"- AI 판단({w}): {v['headline']}" for w, v in ai["windows"].items()]
         return "\n".join(rows)
 
     def calendar():
-        cal = get_week_calendar()
-        now = pd.Timestamp.now(tz="Asia/Seoul")
-        cal = cal[(cal["일시(KST)"] >= now) & (cal["일시(KST)"] <= now + pd.Timedelta(hours=40))
-                  & (cal["_impact"].isin(["High", "Medium"]))]
-        return "\n".join(f"- {r['일시(KST)']:%m/%d %H:%M} {r['지표']} ({r['중요도']}) 예상 {r['예상'] or '-'} 이전 {r['이전'] or '-'}"
-                         for _, r in cal.iterrows()) or "- 중요 일정 없음"
+        return _calendar_text()
 
     def recent():
-        r = get_recent_indicators().sort_values("발표", ascending=False).head(8)
-        return "\n".join(f"- {x['지표']}: {x['최신']} (예상 {x['예상'] or '-'}, {x['서프라이즈'] or '-'}) 발표 {x['발표']:%m/%d}"
-                         for _, x in r.iterrows())
+        return _recent_text()
 
     def views():
         rows = []
@@ -420,12 +414,111 @@ def summarize_insight() -> None:
     log.info(f"[인사이트] {len(lines)}문장 · 확인 안 된 숫자 {unverified or '없음'} · {meta.get('duration_ms', 0) / 1000:.0f}초")
 
 
+# ── 5) 10년물 판단 (채권 › 곡선 분해 맨 위) ──────────────
+BOND_SYSTEM = """너는 미국 국채 애널리스트이자 설명을 잘하는 선생님이다. 독자는 금융을 공부하는 사람이다.
+'미국 10년물 금리가 왜 움직였나'를 기간별(1주, 1개월)로 판단해 쉬운 한국어로 쓴다.
+
+판단 방법
+- '규칙 기반 근거'는 정해진 공식으로 계산한 숫자와 판정이다. 참고하되 그대로 따르지 않는다.
+  커브 모양, 실질금리와 기대인플레의 움직임, 수급, 입찰, 최근 지표, 뉴스·리서치 맥락까지 보고 스스로 판단한다.
+- 공통 기간 분해(ACM 모형)는 며칠 늦게 공개된다. '최신 기준' 숫자와 크게 다르면 그 차이를 판단에 반영하고 짚어 준다.
+- 규칙 판정과 같은지 다른지(vs_rule)를 정하고, 다르면 왜 다르게 보는지 vs_rule_reason에 쓴다.
+- 맥락 자료(뉴스·리서치·관점)는 최근 하루치다. 기간 초반의 원인을 이것으로 지어내지 않는다.
+  원인으로 쓸 때는 context_ids에 그 id(예: N2, R1, B3)를 넣고, 데이터로 확인되지 않으면 '가능성'으로 쓴다.
+- 수급 스트레스가 '주의' 이상이거나 유동성 경고가 있으면 반드시 언급한다.
+
+쓰는 방법 (가장 중요)
+- headline: 결론 한 문장(55자 이내). 전문용어 없이, 무엇이 금리를 움직였는지가 바로 보이게.
+  좋은 예: "이번 주 금리 하락은 경기 걱정보다 '물가가 덜 오를 것'이라는 기대가 이끌었다"
+- explanation: 2~4문장. ① 무엇이 움직였나 → ② 왜 그렇게 보나 → ③ 그래서 무슨 뜻인가.
+  A·B·C·D 같은 기호는 쓰지 않는다. 텀프리미엄, BEI 같은 용어는 처음 쓸 때 괄호로 풀어 쓴다
+  (예: 텀프리미엄(장기채를 오래 들고 있는 대가로 더 받는 금리)).
+- evidence: 판단을 받치는 근거 2~3개. 각각 짧은 한 문장에 숫자 하나 이상.
+- confidence: 높음/중간/낮음과 그 이유 한 문장 (예: 모형 데이터가 며칠 늦음, 움직임이 작음, 근거끼리 어긋남).
+- change_mind: 이게 나오면 판단을 바꾸겠다는 관찰 가능한 신호 1~2개.
+- 숫자는 아래 데이터에 있는 값만 그대로 쓴다. 새로 계산하지 않는다. 단정하지 않고 투자 권유를 하지 않는다."""
+_BOND_WINDOW_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "headline": {"type": "string"}, "explanation": {"type": "string"},
+        "evidence": {"type": "array", "items": {"type": "string"}},
+        "vs_rule": {"type": "string", "enum": ["일치", "부분 일치", "다름"]}, "vs_rule_reason": {"type": "string"},
+        "confidence": {"type": "string", "enum": ["높음", "중간", "낮음"]}, "confidence_reason": {"type": "string"},
+        "change_mind": {"type": "array", "items": {"type": "string"}},
+        "context_ids": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["headline", "explanation", "evidence", "vs_rule", "vs_rule_reason", "confidence", "confidence_reason",
+                 "change_mind", "context_ids"], "additionalProperties": False,
+}
+
+
+def _context_items() -> tuple[str, dict]:
+    """뉴스 이슈(N)·리서치 논점(R)·바이사이드 관점(B)을 id와 함께. 반환: (텍스트, {id: 출처 정보})."""
+    from data.news import load_news_summary
+    from data.telegram import load_summary
+    items, rows = {}, []
+    news = load_news_summary()
+    for i, it in enumerate((news or {}).get("issues", []), 1):
+        items[f"N{i}"] = {"kind": "뉴스", "title": it["title"], "link": it["articles"][0]["link"] if it["articles"] else ""}
+        rows.append(f"[N{i}] 뉴스 이슈({it['region']}, 기사 {it['count']}건): {it['title']} — {it['summary']}")
+    res = load_summary()
+    for i, t in enumerate((res or {}).get("themes", []), 1):
+        items[f"R{i}"] = {"kind": "리서치", "title": t["title"], "link": t["sources"][0]["link"] if t["sources"] else ""}
+        rows.append(f"[R{i}] 리서치 논점({t['rates_view']}): {t['title']} — {t['summary']}")
+    bs = load_summary(config.BUYSIDE_SUMMARY_FILE)
+    for i, v in enumerate((bs or {}).get("views", []), 1):
+        items[f"B{i}"] = {"kind": "바이사이드", "title": v["title"], "link": v["sources"][0]["link"] if v["sources"] else ""}
+        rows.append(f"[B{i}] 바이사이드 관점: {v['title']} — {v['thesis']}" + (f" (시장 반영과 차이: {v['vs_market']})" if v["vs_market"] else ""))
+    return "\n".join(rows) or "- 맥락 자료 없음", items
+
+
+def summarize_bond_view() -> None:
+    from data.bond_story import WINDOWS, rule_snapshot, snapshot_text
+    snaps = {w: rule_snapshot(w) for w in WINDOWS}
+    context, items = _context_items()
+    text = (f"작성 시각: {datetime.now():%Y-%m-%d %H:%M} KST\n\n"
+            + "\n\n".join(f"[규칙 기반 근거 · {w}]\n{snapshot_text(s)}" for w, s in snaps.items())
+            + f"\n\n[최근 발표 지표 (예상 대비)]\n{_recent_text()}\n\n[향후 40시간 미국 주요 일정 (KST)]\n{_calendar_text()}"
+            + f"\n\n[맥락: 최근 하루 뉴스·리서치·관점 (id)]\n{context}")
+    keys = {"1주": "week", "1개월": "month"}  # 스키마 키는 영문만 허용
+    schema = {"type": "object", "properties": {keys[w]: _BOND_WINDOW_SCHEMA for w in WINDOWS},
+              "required": [keys[w] for w in WINDOWS], "additionalProperties": False}
+    data, meta = run_claude(BOND_SYSTEM, schema, text,
+                            "아래 데이터로 기간별 10년물 판단을 규칙에 따라 JSON으로만 답하라. week = 1주, month = 1개월.")
+
+    source_nums = {n.replace(",", "") for n in _NUM.findall(text)}
+    windows = {}
+    for w, s in snaps.items():
+        v = data.get(keys[w]) or {}
+        if not v.get("headline"):
+            continue
+        written = [v["headline"], v["explanation"], *v["evidence"], v["vs_rule_reason"], v["confidence_reason"], *v["change_mind"]]
+        windows[w] = {
+            "headline": v["headline"].strip(), "explanation": v["explanation"].strip(),
+            "evidence": [x.strip() for x in v["evidence"] if x.strip()], "vs_rule": v["vs_rule"],
+            "vs_rule_reason": v["vs_rule_reason"].strip(), "confidence": v["confidence"],
+            "confidence_reason": v["confidence_reason"].strip(),
+            "change_mind": [x.strip() for x in v["change_mind"] if x.strip()],
+            "sources": [{"id": i, **items[i]} for i in dict.fromkeys(v.get("context_ids", [])) if i in items],  # 없는 id는 버림
+            "unverified_numbers": sorted({n for line in written for n in _NUM.findall(line) if n.replace(",", "") not in source_nums}),
+            # 나중에 AI·규칙 비교와 사후 채점에 쓰는 기록
+            "rule_verdict": s["attr"].verdict, "rule_leader": s["attr"].leader, "nominal_bp": round(s["attr"].nominal, 1),
+            "fresh_nominal_bp": round(float(s["fresh"]["명목 10년"]), 1), "end": f"{s['end']:%Y-%m-%d}",
+            "panel1_end": f"{s['panel1_end']:%Y-%m-%d}", "stress": s["stress"]["level"],
+        }
+    payload = {"generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "windows": windows, "input": text,
+               "model": MODEL, "meta": meta}
+    save(config.BOND_VIEW_FILE, "bond_views.jsonl", payload)
+    log.info(f"[10년물 판단] " + " · ".join(f"{w}: {v['vs_rule']}" for w, v in windows.items())
+             + f" · {meta.get('duration_ms', 0) / 1000:.0f}초")
+
+
 def main() -> int:
     log.info("=== AI 요약 시작 ===")
     failed = []
     jobs = [summarize_telegram, summarize_news, summarize_buyside]
     if datetime.now().hour < 11 or "--insight" in sys.argv:  # 하루 3회 중 아침 08:30 실행에서만
-        jobs.append(summarize_insight)  # 앞의 요약 결과도 재료로 쓰므로 마지막
+        jobs += [summarize_bond_view, summarize_insight]  # 앞의 요약 결과도 재료로 쓰므로 마지막
     for job in jobs:
         try:
             job()

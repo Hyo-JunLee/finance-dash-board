@@ -173,7 +173,7 @@ with tabs[4]:
     with r:
         show_chart(line_chart({"NFCI": clip(nfci)}, "금융여건지수", hline=0, hline_label="평균",
                               decimals=3, height=240))
-    st.caption("신용 스프레드·NFCI는 무료 실시간 소스가 없어 FRED(1일~1주 지연) 사용")
+    st.caption("신용 스프레드·NFCI는 무료 실시간 소스가 없어 FRED(1일\\~1주 지연) 사용")
 
 # ── 서프라이즈 ───────────────────────────────────────
 with tabs[5]:

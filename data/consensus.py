@@ -39,16 +39,27 @@ def fetch_day(release_day: date) -> list[dict]:
     path = DISK_DIR / f"{release_day.isoformat()}.json"
     us_today = datetime.now(ZoneInfo("America/New_York")).date()
     settled = release_day < us_today - timedelta(days=1)  # 실제치까지 확정된 날짜 (미 동부 기준)
-    if path.exists() and (settled or time.time() - path.stat().st_mtime < 300):
-        return json.loads(path.read_text())
+    cached = json.loads(path.read_text()) if path.exists() else None
+    age = time.time() - path.stat().st_mtime if path.exists() else 0
+    # Nasdaq이 가끔 평일을 통째로 빈 목록으로 준다(11/19·11/23 사례) → 빈 결과는 확정으로 보지 않고 30분마다 다시 받는다
+    if cached is not None and ((settled and cached) or age < (300 if cached or not settled else 1800)):
+        return cached
     query_day = release_day + timedelta(days=1)  # API 날짜가 하루 밀려 있음
-    r = requests.get(API, params={"date": query_day.isoformat()}, headers=_HEADERS, timeout=15)
-    r.raise_for_status()
-    rows = (r.json().get("data") or {}).get("rows") or []
+    try:
+        r = requests.get(API, params={"date": query_day.isoformat()}, headers=_HEADERS, timeout=15)
+        r.raise_for_status()
+        rows = (r.json().get("data") or {}).get("rows") or []
+    except Exception:
+        if cached is not None:
+            return cached
+        raise
     us = [
         {k: x.get(k) for k in ("gmt", "eventName", "actual", "consensus", "previous")}
         for x in rows if x.get("country") == "United States"
     ]
+    if not us and cached:  # 일시적인 빈 응답이 이미 받은 값을 지우지 않게
+        path.touch()
+        return cached
     path.write_text(json.dumps(us, ensure_ascii=False))
     return us
 

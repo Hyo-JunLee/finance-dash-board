@@ -1,5 +1,6 @@
 """미국 경제지표: 이번 주 발표 일정(ForexFactory) + 최근 발표치(FRED)."""
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
@@ -53,7 +54,69 @@ TITLE_KO = {
     "PCE Price Index m/m": "PCE (전월비)",
     "Industrial Production m/m": "산업생산 (전월비)",
     "Core PCE Price Index y/y": "근원 PCE (전년비)",
+    "Flash Manufacturing PMI": "S&P 제조업 PMI (예비)",
+    "Flash Services PMI": "S&P 서비스업 PMI (예비)",
+    "Final Manufacturing PMI": "S&P 제조업 PMI (확정)",
+    "Final Services PMI": "S&P 서비스업 PMI (확정)",
+    "ISM Manufacturing Prices": "ISM 제조업 가격지수",
+    "ISM Services Prices": "ISM 서비스업 가격지수",
+    "ADP Weekly Employment Change": "ADP 주간 고용",
+    "HPI m/m": "FHFA 주택가격 (전월비)",
+    "S&P/CS Composite-20 HPI y/y": "케이스-실러 주택가격 (전년비)",
+    "Richmond Manufacturing Index": "리치먼드 연은 제조업지수",
+    "Empire State Manufacturing Index": "뉴욕 연은 제조업지수",
+    "Philly Fed Manufacturing Index": "필라델피아 연은 제조업지수",
+    "Chicago PMI": "시카고 PMI",
+    "API Weekly Statistical Bulletin": "API 원유 재고",
+    "Crude Oil Inventories": "EIA 원유 재고",
+    "Natural Gas Storage": "천연가스 재고",
+    "Personal Spending m/m": "개인소비지출 (전월비)",
+    "Personal Income m/m": "개인소득 (전월비)",
+    "Core Durable Goods Orders m/m": "근원 내구재 주문 (전월비)",
+    "Prelim GDP Price Index q/q": "GDP 물가지수 잠정치 (전기비)",
+    "Advance GDP Price Index q/q": "GDP 물가지수 속보치 (전기비)",
+    "Final GDP Price Index q/q": "GDP 물가지수 확정치 (전기비)",
+    "Beige Book": "베이지북",
+    "Bank Holiday": "휴장 (공휴일)",
+    "Goods Trade Balance": "상품수지",
+    "Prelim Wholesale Inventories m/m": "도매재고 예비치 (전월비)",
+    "Business Inventories m/m": "기업재고 (전월비)",
+    "Revised UoM Consumer Sentiment": "미시간대 소비자심리 (확정)",
+    "Prelim UoM Inflation Expectations": "미시간대 기대인플레 (예비)",
+    "Revised UoM Inflation Expectations": "미시간대 기대인플레 (확정)",
+    "Pending Home Sales m/m": "잠정주택 판매 (전월비)",
+    "NAHB Housing Market Index": "NAHB 주택시장지수",
+    "Import Prices m/m": "수입물가 (전월비)",
+    "Employment Cost Index q/q": "고용비용지수 (전기비)",
+    "Capacity Utilization Rate": "설비가동률",
+    "Federal Budget Balance": "재정수지",
+    "Challenger Job Cuts y/y": "챌린저 감원 (전년비)",
+    "Prelim Nonfarm Productivity q/q": "비농업 생산성 잠정치 (전기비)",
+    "Prelim Unit Labor Costs q/q": "단위노동비용 잠정치 (전기비)",
+    "Current Account": "경상수지",
+    "TIC Long-Term Purchases": "TIC 장기증권 순매입",
+    "Average Hourly Earnings y/y": "평균 시간당 임금 (전년비)",
+    "FOMC Statement": "FOMC 성명",
+    "FOMC Press Conference": "FOMC 기자회견",
+    "FOMC Economic Projections": "FOMC 경제전망 (점도표)",
 }
+_SPEECH = [(re.compile(r"^Fed Chair (\w+) Speaks$"), "연준 의장 {} 발언"),
+           (re.compile(r"^FOMC Member (\w+) Speaks$"), "연준 {} 발언"),
+           (re.compile(r"^Treasury Sec (\w+) Speaks$"), "재무장관 {} 발언"),
+           (re.compile(r"^President (\w+) Speaks$"), "{} 대통령 발언")]
+_AUCTION = re.compile(r"^(\d+)-y (?:Bond|Note) Auction$")
+
+
+def title_ko(title: str) -> str:
+    """ForexFactory 지표명 → 한글. 사전에 없으면 발언·입찰 패턴, 그래도 없으면 원문."""
+    if title in TITLE_KO:
+        return TITLE_KO[title]
+    for pattern, fmt in _SPEECH:
+        m = pattern.match(title)
+        if m:
+            return fmt.format(m.group(1))
+    m = _AUCTION.match(title)
+    return f"{m.group(1)}년물 국채 입찰" if m else title
 
 
 def _load_ff_events() -> list[dict]:
@@ -84,7 +147,7 @@ def get_week_calendar() -> pd.DataFrame:
     dt = pd.to_datetime(df["date"], utc=True).dt.tz_convert("Asia/Seoul")
     return pd.DataFrame({
         "일시(KST)": dt,
-        "지표": df["title"].map(lambda t: TITLE_KO.get(t, t)),
+        "지표": df["title"].map(title_ko),
         "중요도": df["impact"].map(lambda i: IMPACT_KO.get(i, i)),
         "예상": df["forecast"].replace("", None),
         "이전": df["previous"].replace("", None),

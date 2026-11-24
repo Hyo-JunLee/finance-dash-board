@@ -34,6 +34,85 @@ def _clip(df, years: int):
     return df[df.index >= df.index[-1] - pd.DateOffset(years=years)]
 
 
+VS_RULE_COLOR = {"일치": "green", "부분 일치": "orange", "다름": "red"}
+CONF_COLOR = {"높음": "green", "중간": "blue", "낮음": "orange"}
+
+
+def _md(text: str) -> str:
+    return text.replace("$", "\\$").replace("~", "\\~")  # 달러·물결이 수식·취소선으로 바뀌지 않게
+
+
+def _ai_bond_card(window: str, attr, liq_text: str | None, liq_warn: bool) -> None:
+    """맨 위 AI 판단: 결론 → 설명 → 근거 | 규칙과 비교·확신도·판단을 바꿀 신호 → 참고 출처."""
+    from data.telegram import load_summary
+    view = load_summary(config.BOND_VIEW_FILE)
+    v = (view or {}).get("windows", {}).get(window)
+    with st.container(border=True):
+        if liq_warn:
+            st.warning(liq_text)
+        if v is None:
+            st.markdown(f"**🧭 {window} 판정 (규칙 기반)**")
+            if attr is not None:
+                st.markdown(f"10년물 {attr.nominal:+.0f}bp · **{attr.verdict}** — 자세한 근거는 아래 '근거 ①'을 펼쳐 보세요.")
+            st.caption("AI 판단은 매일 08:30에 1주·1개월 기간으로 만듭니다. 이 기간은 규칙 판정만 있습니다.")
+            return
+        made = pd.Timestamp(view["generated_at"])
+        stale = made.date() != datetime.now().date()
+        st.caption(f"🧭 AI 판단 · {window} · {made:%m/%d %H:%M} 작성 (데이터 \\~{pd.Timestamp(v['panel1_end']):%m/%d})"
+                   + (" · :orange[오늘 것 아님]" if stale else ""))
+        st.markdown(f"#### {_md(v['headline'])}")
+        st.markdown(_md(v["explanation"]))
+        left, right = st.columns([1, 1], gap="large")
+        with left:
+            st.markdown("**근거**  \n" + "  \n".join(f"· {_md(e)}" for e in v["evidence"]))
+        with right:
+            color = VS_RULE_COLOR.get(v["vs_rule"], "gray")
+            st.markdown(f"**규칙 판정과 비교** :{color}-badge[{v['vs_rule']}]  \n"
+                        f"규칙: {v['rule_verdict']}  \n{_md(v['vs_rule_reason'])}")
+            st.markdown(f"**확신도** :{CONF_COLOR.get(v['confidence'], 'gray')}-badge[{v['confidence']}]  \n"
+                        f"{_md(v['confidence_reason'])}")
+            if v["change_mind"]:
+                st.markdown("**이게 나오면 판단을 바꿉니다**  \n" + "  \n".join(f"· {_md(x)}" for x in v["change_mind"]))
+        note = "AI(Claude)가 아래 규칙 기반 근거와 최근 뉴스·리서치를 함께 읽고 쓴 판단입니다. 투자 권유가 아닙니다."
+        if v["sources"]:
+            note = "참고: " + " · ".join(f"[{x['kind']} · {x['title']}]({x['link']})" if x.get("link") else f"{x['kind']} · {x['title']}"
+                                       for x in v["sources"]) + " · " + note
+        if v.get("unverified_numbers"):
+            note += f" · :orange[데이터에서 확인되지 않은 숫자: {', '.join(v['unverified_numbers'])}]"
+        st.caption(note)
+
+
+def _ai_history(rb: pd.DataFrame) -> None:
+    """매일 아침 AI 판단과 규칙 판정을 나란히 쌓고, 판단 이후 1주간 10년물이 실제로 어떻게 움직였는지 붙인다."""
+    import json
+    path = config.BASE_DIR / "collected" / "bond_views.jsonl"
+    try:
+        logs = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    except FileNotFoundError:
+        st.caption("아직 기록이 없습니다. 매일 08:30 판단이 쌓입니다.")
+        return
+    nominal = rb["명목 10년"]
+    rows = []
+    for rec in logs:
+        for w, v in rec.get("windows", {}).items():
+            base = pd.Timestamp(v["panel1_end"])
+            after = nominal[(nominal.index > base) & (nominal.index <= base + pd.Timedelta(days=7))]
+            rows.append({
+                "작성": rec["generated_at"], "기간": w, "10년물(bp)": v["fresh_nominal_bp"],
+                "규칙 판정": v["rule_verdict"], "AI 결론": v["headline"], "비교": v["vs_rule"], "확신도": v["confidence"],
+                "이후 1주 10년물(bp)": round((after.iloc[-1] - nominal[nominal.index <= base].iloc[-1]) * 100, 0)
+                if len(after) else None,
+            })
+    if not rows:
+        st.caption("아직 기록이 없습니다.")
+        return
+    df = pd.DataFrame(rows).sort_values("작성", ascending=False).drop_duplicates(["작성", "기간"])
+    agree = (df["비교"] == "일치").mean() * 100
+    st.caption(f"기록 {len(df)}건 · 규칙과 일치 {agree:.0f}% · '이후 1주 10년물'은 판단 데이터 기준일 다음 1주간의 실제 변화"
+               " (판단이 방향을 맞혔는지가 아니라, 어떤 판단 뒤에 금리가 어떻게 움직였는지 쌓아 보는 용도)")
+    st.dataframe(df, hide_index=True, width="stretch")
+
+
 FLOW_JUDGE_WINDOWS = ("1주", "1개월")  # 이보다 긴 기간은 한 번만 튀어도 '스트레스'로 기울어 결합 판정 생략
 
 
@@ -65,7 +144,7 @@ def _flow_section(window, attr, noise_bp, since_c, common_end, premium_like, d2,
         stress = fr.stress_level({k: (p[0] if p else None) for k, p in peaks.items()}, z_thr, n_thr)
         mismatch = fr.curve_mismatch(attr.leader, premium_like, abs(d2) >= noise_bp)
         _, text = fr.combine(attr.leader, abs(attr.nominal) >= noise_bp, mismatch, stress["level"])
-        basis = f"기준: 종합 판정과 같은 {window} 기간(~{common_end:%m/%d})의 지표별 최대 |z|"
+        basis = f"기준: 종합 판정과 같은 {window} 기간(\\~{common_end:%m/%d})의 지표별 최대 |z|"
     else:
         now = pd.Timestamp.now()
         peaks = {k: (fr.window_peak(z, now, now) if z is not None else None) for k, z in zs.items()}
@@ -184,110 +263,119 @@ with tabs[0]:
 
     c1, c2 = st.columns([3, 2], vertical_alignment="bottom")
     c1.markdown("##### 10년물 금리는 왜 움직였나")
+    c1.caption("맨 위는 AI 판단(매일 08:30), 아래 '근거'는 정해진 공식으로 계산한 규칙 기반 분해입니다.")
     window = c2.segmented_control("변화 기간", list(CHANGE_WINDOWS), default="1개월", key="dec_win") or "1개월"
+    ai_slot = st.container()  # AI 판단 카드: 아래 규칙 계산이 끝난 뒤 채운다
 
-    rb_chg = b.change_bp(rb, _since(rb.index[-1], CHANGE_WINDOWS[window]))
-    left, right = st.columns(2, gap="large")
-    with left:
-        show_chart(returns_bar(rb_chg.rename({"명목 10년": "명목 10년 (=실질+BEI)"}),
-                               f"① 실질금리 vs 기대인플레 ({window}, ~{rb.index[-1]:%m/%d})",
-                               height=220, unit="bp", sort=False, decimals=0))
-        st.caption(b.explain_change(rb_chg["명목 10년"],
-                                    {"실질금리": rb_chg["실질 10년"], "기대인플레": rb_chg["기대인플레(BEI)"]}))
-    with right:
-        if not acm.empty:
-            acm_chg = b.change_bp(acm, _since(acm.index[-1], CHANGE_WINDOWS[window]))
-            show_chart(returns_bar(acm_chg.rename({"ACM 10년": "ACM 10년 (=경로+TP)"}),
-                                   f"② 기대 금리경로 vs 텀 프리미엄 ({window}, ~{acm.index[-1]:%m/%d})",
+    with st.expander("🔍 근거 ① 규칙 기반 분해 — 실질금리·기대인플레 / 정책 기대·텀프리미엄", expanded=False):
+        rb_chg = b.change_bp(rb, _since(rb.index[-1], CHANGE_WINDOWS[window]))
+        left, right = st.columns(2, gap="large")
+        with left:
+            show_chart(returns_bar(rb_chg.rename({"명목 10년": "명목 10년 (=실질+BEI)"}),
+                                   f"① 실질금리 vs 기대인플레 ({window}, ~{rb.index[-1]:%m/%d})",
                                    height=220, unit="bp", sort=False, decimals=0))
-            st.caption(b.explain_change(acm_chg["ACM 10년"],
-                                        {"기대 금리경로": acm_chg["기대 단기금리 경로"], "텀 프리미엄": acm_chg["텀 프리미엄"]})
-                       + " (ACM은 모델 추정치로 뉴욕 연은이 며칠 늦게 공개)")
+            st.caption(b.explain_change(rb_chg["명목 10년"],
+                                        {"실질금리": rb_chg["실질 10년"], "기대인플레": rb_chg["기대인플레(BEI)"]}))
+        with right:
+            if not acm.empty:
+                acm_chg = b.change_bp(acm, _since(acm.index[-1], CHANGE_WINDOWS[window]))
+                show_chart(returns_bar(acm_chg.rename({"ACM 10년": "ACM 10년 (=경로+TP)"}),
+                                       f"② 기대 금리경로 vs 텀 프리미엄 ({window}, ~{acm.index[-1]:%m/%d})",
+                                       height=220, unit="bp", sort=False, decimals=0))
+                st.caption(b.explain_change(acm_chg["ACM 10년"],
+                                            {"기대 금리경로": acm_chg["기대 단기금리 경로"], "텀 프리미엄": acm_chg["텀 프리미엄"]})
+                           + " (ACM은 모델 추정치로 뉴욕 연은이 며칠 늦게 공개)")
 
-    # ── 종합 판정: 패널 ①×② 교차 (공통 마지막 날짜 기준) ──
-    st.markdown("##### 종합 판정 (패널 ①×② 교차 검증)")
-    if acm.empty:
-        st.info("ACM 데이터가 없어 종합 판정을 계산할 수 없습니다.")
-    else:
-        with st.expander("판정 설정"):
-            s1, s2 = st.columns(2)
-            noise_bp = s1.number_input("노이즈 임계값 (bp)", 0.0, 20.0, config.ATTR_NOISE_BP, 0.5,
-                                       help="성분 변화의 절댓값이 이보다 작으면 '유의미한 변화 아님'으로 보고 판정에서 제외")
-            gap_bp = s2.number_input("모형 괴리 경고 (bp)", 0.0, 50.0, config.ATTR_TP_MODEL_GAP_BP, 0.5,
-                                     help="ACM과 Kim-Wright 텀프리미엄 변화 차이가 이보다 크면 해석 신뢰도 경고")
-            f1, f2, f3 = st.columns(3)
-            flow_z = f1.number_input("수급 z 임계값", 0.5, 5.0, config.FLOW_Z_THRESHOLD, 0.25,
-                                     help="수급·포지션: 스트레스 지표의 |z|가 이 값 이상이면 '튐'으로 셈")
-            flow_n = int(f2.number_input("'높음' 판정 지표 수", 1, 4, config.FLOW_STRESS_COUNT, 1,
-                                         help="튄 지표가 이 개수 이상이면 수급 스트레스 '높음', 1개 이상이면 '주의'"))
-            flow_win = int(f3.number_input("롤링 z 창 (영업일)", 60, 756, config.FLOW_Z_WINDOW_DAYS, 21,
-                                           help="z-score 기준 기간. 252 = 1년. 주간 데이터는 5로 나눈 주 수"))
+        # ── 종합 판정: 패널 ①×② 교차 (공통 마지막 날짜 기준) ──
+        st.markdown("**종합 판정 (패널 ①×② 교차 검증)**")
+        if acm.empty:
+            st.info("ACM 데이터가 없어 종합 판정을 계산할 수 없습니다.")
+        else:
+            with st.popover("⚙️ 판정 설정"):
+                s1, s2 = st.columns(2)
+                noise_bp = s1.number_input("노이즈 임계값 (bp)", 0.0, 20.0, config.ATTR_NOISE_BP, 0.5,
+                                           help="성분 변화의 절댓값이 이보다 작으면 '유의미한 변화 아님'으로 보고 판정에서 제외")
+                gap_bp = s2.number_input("모형 괴리 경고 (bp)", 0.0, 50.0, config.ATTR_TP_MODEL_GAP_BP, 0.5,
+                                         help="ACM과 Kim-Wright 텀프리미엄 변화 차이가 이보다 크면 해석 신뢰도 경고")
+                f1, f2, f3 = st.columns(3)
+                flow_z = f1.number_input("수급 z 임계값", 0.5, 5.0, config.FLOW_Z_THRESHOLD, 0.25,
+                                         help="수급·포지션: 스트레스 지표의 |z|가 이 값 이상이면 '튐'으로 셈")
+                flow_n = int(f2.number_input("'높음' 판정 지표 수", 1, 4, config.FLOW_STRESS_COUNT, 1,
+                                             help="튄 지표가 이 개수 이상이면 수급 스트레스 '높음', 1개 이상이면 '주의'"))
+                flow_win = int(f3.number_input("롤링 z 창 (영업일)", 60, 756, config.FLOW_Z_WINDOW_DAYS, 21,
+                                               help="z-score 기준 기간. 252 = 1년. 주간 데이터는 5로 나눈 주 수"))
 
-        common_end = min(rb.index[-1], acm.index[-1])
-        since_c = _since(common_end, CHANGE_WINDOWS[window])
-        rb_c = b.change_bp(rb[rb.index <= common_end], since_c)
-        acm_c = b.change_bp(acm[acm.index <= common_end], since_c)
-        attr = attribute(rb_c["실질 10년"], rb_c["기대인플레(BEI)"], acm_c["기대 단기금리 경로"], acm_c["텀 프리미엄"],
-                         noise_bp=noise_bp)
+            common_end = min(rb.index[-1], acm.index[-1])
+            since_c = _since(common_end, CHANGE_WINDOWS[window])
+            rb_c = b.change_bp(rb[rb.index <= common_end], since_c)
+            acm_c = b.change_bp(acm[acm.index <= common_end], since_c)
+            attr = attribute(rb_c["실질 10년"], rb_c["기대인플레(BEI)"], acm_c["기대 단기금리 경로"], acm_c["텀 프리미엄"],
+                             noise_bp=noise_bp)
 
-        # Kim-Wright: 공통 기간 끝까지 데이터가 있을 때만 비교
-        try:
-            kw = get_fred_series("THREEFYTP10")
-            kw_end = kw.index[-1]
-            d_kw = (kw[kw.index <= common_end].iloc[-1] - kw[kw.index <= since_c].iloc[-1]) * 100 \
-                if kw_end >= common_end else None
-        except Exception:
-            kw_end, d_kw = None, None
+            # Kim-Wright: 공통 기간 끝까지 데이터가 있을 때만 비교
+            try:
+                kw = get_fred_series("THREEFYTP10")
+                kw_end = kw.index[-1]
+                d_kw = (kw[kw.index <= common_end].iloc[-1] - kw[kw.index <= since_c].iloc[-1]) * 100 \
+                    if kw_end >= common_end else None
+            except Exception:
+                kw_end, d_kw = None, None
 
-        # 모형 없는 보조 검증: 같은 공통 기간의 2·10·30년 변화
-        curve = get_treasury_curve((since_c - pd.Timedelta(days=10)).date(), NOMINAL)
-        curve_c = b.change_bp(curve[curve.index <= common_end][["2 Yr", "10 Yr", "30 Yr"]], since_c)
+            # 모형 없는 보조 검증: 같은 공통 기간의 2·10·30년 변화
+            curve = get_treasury_curve((since_c - pd.Timedelta(days=10)).date(), NOMINAL)
+            curve_c = b.change_bp(curve[curve.index <= common_end][["2 Yr", "10 Yr", "30 Yr"]], since_c)
 
-        # 유동성 왜곡 점검: 같은 공통 기간의 HY 스프레드(FRED, 최근 3년만 제공)·MOVE 변화
-        def _window(s: pd.Series):
-            s = s[s.index <= common_end]
-            if s.empty:
-                return None, None
-            start = s[s.index <= since_c]
-            return (start.iloc[-1] if len(start) else None), s.iloc[-1]
-        try:
-            hy0, hy1 = _window(get_fred_series("BAMLH0A0HYM2"))
-        except Exception:
-            hy0, hy1 = None, None
-        try:
-            mv0, mv1 = _window(yahoo("^MOVE", years=3))
-        except Exception:
-            mv0, mv1 = None, None
-        liq_text, liq_warn = liquidity_check(
-            (hy1 - hy0) * 100 if hy0 is not None and hy1 is not None else None, hy1,
-            (mv1 / mv0 - 1) * 100 if mv0 is not None and mv1 is not None else None, mv1,
-            attr.components["D"], noise_bp, config.ATTR_HY_WIDEN_BP, config.ATTR_HY_LEVEL,
-            config.ATTR_MOVE_RISE_PCT, config.ATTR_MOVE_LEVEL)
+            # 유동성 왜곡 점검: 같은 공통 기간의 HY 스프레드(FRED, 최근 3년만 제공)·MOVE 변화
+            def _window(s: pd.Series):
+                s = s[s.index <= common_end]
+                if s.empty:
+                    return None, None
+                start = s[s.index <= since_c]
+                return (start.iloc[-1] if len(start) else None), s.iloc[-1]
+            try:
+                hy0, hy1 = _window(get_fred_series("BAMLH0A0HYM2"))
+            except Exception:
+                hy0, hy1 = None, None
+            try:
+                mv0, mv1 = _window(yahoo("^MOVE", years=3))
+            except Exception:
+                mv0, mv1 = None, None
+            liq_text, liq_warn = liquidity_check(
+                (hy1 - hy0) * 100 if hy0 is not None and hy1 is not None else None, hy1,
+                (mv1 / mv0 - 1) * 100 if mv0 is not None and mv1 is not None else None, mv1,
+                attr.components["D"], noise_bp, config.ATTR_HY_WIDEN_BP, config.ATTR_HY_LEVEL,
+                config.ATTR_MOVE_RISE_PCT, config.ATTR_MOVE_LEVEL)
 
-        left_c, right_c = st.columns([3, 2], gap="large")
-        with left_c, st.container(border=True):
-            if liq_warn:
-                st.warning(liq_text)
-            st.markdown(summary_text(attr, f"{common_end:%m/%d}", f"{rb.index[-1]:%m/%d}", f"{acm.index[-1]:%m/%d}",
-                                     noise_bp))
-        with right_c:
-            text, _ = curve_check(curve_c["2 Yr"], curve_c["10 Yr"], curve_c["30 Yr"], noise_bp)
-            st.markdown(f"**보조 검증 (모형 없음)**  \n{text}")
-            kw_text, _ = tp_model_check(acm_c["텀 프리미엄"], d_kw, gap_bp)
-            kw_note = f" (Kim-Wright 데이터 ~{kw_end:%m/%d})" if kw_end is not None else ""
-            st.markdown(f"**텀프리미엄 모형 비교**  \n{kw_text}{kw_note}")
-            if not liq_warn:
-                st.markdown(f"**유동성 왜곡 점검**  \n{liq_text}",
-                            help="시장 경색 때 TIPS 유동성 프리미엄이 커지면 BEI 하락이 인플레 리스크 프리미엄(D) 하락으로 "
-                                 "잘못 읽힙니다. HY 스프레드나 MOVE가 급등하면 판정 위에 경고를 띄웁니다.")
-            st.metric("데이터 정합성 체크", f"{attr.consistency_gap:+.1f}bp", border=True,
-                      help="ACM 텀프리미엄 변화 − 내재 텀프리미엄(C+D) 변화. 수식상 'ACM 10년 변화 − 재무부 10년 변화'와 같아, "
-                           "가정 검증이 아니라 ACM 무이표채(zero-coupon) 금리와 재무부 이표채(par) 금리의 측정 차이를 보여줍니다.")
+            left_c, right_c = st.columns([3, 2], gap="large")
+            with left_c, st.container(border=True):
+                if liq_warn:
+                    st.warning(liq_text)
+                st.markdown(summary_text(attr, f"{common_end:%m/%d}", f"{rb.index[-1]:%m/%d}", f"{acm.index[-1]:%m/%d}",
+                                         noise_bp))
+            with right_c:
+                text, _ = curve_check(curve_c["2 Yr"], curve_c["10 Yr"], curve_c["30 Yr"], noise_bp)
+                st.markdown(f"**보조 검증 (모형 없음)**  \n{text}")
+                kw_text, _ = tp_model_check(acm_c["텀 프리미엄"], d_kw, gap_bp)
+                kw_note = f" (Kim-Wright 데이터 \\~{kw_end:%m/%d})" if kw_end is not None else ""
+                st.markdown(f"**텀프리미엄 모형 비교**  \n{kw_text}{kw_note}")
+                if not liq_warn:
+                    st.markdown(f"**유동성 왜곡 점검**  \n{liq_text}",
+                                help="시장 경색 때 TIPS 유동성 프리미엄이 커지면 BEI 하락이 인플레 리스크 프리미엄(D) 하락으로 "
+                                     "잘못 읽힙니다. HY 스프레드나 MOVE가 급등하면 판정 위에 경고를 띄웁니다.")
+                st.metric("데이터 정합성 체크", f"{attr.consistency_gap:+.1f}bp", border=True,
+                          help="ACM 텀프리미엄 변화 − 내재 텀프리미엄(C+D) 변화. 수식상 'ACM 10년 변화 − 재무부 10년 변화'와 같아, "
+                               "가정 검증이 아니라 ACM 무이표채(zero-coupon) 금리와 재무부 이표채(par) 금리의 측정 차이를 보여줍니다.")
 
     if not acm.empty:
         _, premium_like = curve_check(curve_c["2 Yr"], curve_c["10 Yr"], curve_c["30 Yr"], noise_bp)
-        _flow_section(window, attr, noise_bp, since_c, common_end, premium_like, curve_c["2 Yr"],
-                      flow_z, flow_n, flow_win, config.FLOW_CORR_WINDOW)
+        with st.expander("🔍 근거 ② 수급·포지션 — 정보에 의한 재가격인가, 포지션 정리인가", expanded=False):
+            _flow_section(window, attr, noise_bp, since_c, common_end, premium_like, curve_c["2 Yr"],
+                          flow_z, flow_n, flow_win, config.FLOW_CORR_WINDOW)
+    with st.expander("📒 AI 판단 vs 규칙 판정 기록", expanded=False):
+        _ai_history(rb)
+    with ai_slot:
+        _ai_bond_card(window, attr if not acm.empty else None, liq_text if not acm.empty else None,
+                      liq_warn if not acm.empty else False)
 
     years = CHART_YEARS[st.segmented_control("차트 기간", list(CHART_YEARS), default="3년", key="dec_years") or "3년"]
     l, r = st.columns(2, gap="large")
@@ -476,7 +564,7 @@ with tabs[4]:
         kpi("한미 금리차 2년", spread["2년 (미−한)"], unit="bp", decimals=0, help="미국 − 한국. 양수면 미국 금리가 높음")
     with c[4]:
         kpi("한미 금리차 10년", spread["10년 (미−한)"], unit="bp", decimals=0, help="미국 − 한국")
-    st.caption(f"출처: KRX 국채전문유통시장 지표물 종가 (다음 영업일 공개, 현재 ~{kr.index[-1]:%Y-%m-%d}) · "
+    st.caption(f"출처: KRX 국채전문유통시장 지표물 종가 (다음 영업일 공개, 현재 \\~{kr.index[-1]:%Y-%m-%d}) · "
                "미국은 재무부 같은 날짜 종가")
 
     # 수익률 곡선: 최근 / 1개월 전 / 1년 전 (1년 전은 데이터가 있을 때만)

@@ -73,7 +73,7 @@ def check_yahoo():
     d = yf.download("^GSPC", period="10d", auto_adjust=True, progress=False)["Close"]
     d = d.iloc[:, 0] if isinstance(d, pd.DataFrame) else d
     if d.empty:
-        return _result("Yahoo 시세", "오늘의 시황·해외 증시", FAIL, "-", "S&P 500 데이터 없음")
+        return _result("Yahoo 시세", "오늘의 시황·미국 증시", FAIL, "-", "S&P 500 데이터 없음")
     nan_last = pd.isna(d.iloc[-1])
     valid = d.dropna()
     b = _bdays_since(valid.index[-1])
@@ -81,7 +81,7 @@ def check_yahoo():
     detail = f"S&P 500 기준 {b}영업일 전"
     if nan_last:  # 10/6 KOSPI처럼 마지막 일봉이 빈 값으로 오는 경우
         status, detail = WARN, detail + " · 마지막 일봉이 빈 값(NaN)"
-    return _result("Yahoo 시세", "오늘의 시황·해외 증시", status, f"{valid.index[-1]:%Y-%m-%d}", detail)
+    return _result("Yahoo 시세", "오늘의 시황·미국 증시", status, f"{valid.index[-1]:%Y-%m-%d}", detail)
 
 
 def check_naver():
@@ -148,14 +148,15 @@ def check_telegram():
         parts.append(f"{label} {hours:.0f}시간 전")
     oldest_h, oldest = max(ages)
     status = OK if oldest_h <= 15 else WARN if oldest_h <= 30 else FAIL
-    try:  # 아침 인사이트는 하루 1회라 26시간까지 정상
-        made = datetime.fromisoformat(json.loads(config.INSIGHT_FILE.read_text())["generated_at"])
-        insight_h = (datetime.now() - made).total_seconds() / 3600
-        parts.append(f"아침 인사이트 {insight_h:.0f}시간 전")
-        if insight_h > 26 and status == OK:
-            status = WARN
-    except (FileNotFoundError, ValueError, KeyError):
-        parts.append("아침 인사이트 없음")
+    for label, path in (("아침 인사이트", config.INSIGHT_FILE), ("10년물 판단", config.BOND_VIEW_FILE)):
+        try:  # 아침 08:30 하루 1회라 26시간까지 정상
+            made = datetime.fromisoformat(json.loads(path.read_text())["generated_at"])
+            hours = (datetime.now() - made).total_seconds() / 3600
+            parts.append(f"{label} {hours:.0f}시간 전")
+            if hours > 26 and status == OK:
+                status = WARN
+        except (FileNotFoundError, ValueError, KeyError):
+            parts.append(f"{label} 없음")
     return _result(name, used, status, f"{oldest:%m/%d %H:%M}", " · ".join(parts) + " (하루 3회 08:30·13:30·18:30)")
 
 
