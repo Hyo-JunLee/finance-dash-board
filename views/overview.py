@@ -9,8 +9,8 @@ from data.econ_calendar import ff_fetched_at, get_recent_indicators, get_week_ac
 from data.market import SUMMARY_ITEMS, fmt_asof, get_snapshot
 from data.news import get_news, load_news_summary
 from data.telegram import load_summary, recent_posts
-from ui import (DOWN_COLOR, UP_COLOR, mini_chart, render_issues, render_news, render_post_list, render_summary,
-                render_views, show_chart)
+from ui import (DOWN_COLOR, UP_COLOR, mini_chart, render_brief_cards, render_issues, render_news, render_post_list,
+                render_summary, render_views, show_chart)
 
 PERIODS = {"1개월": 30, "3개월": 90, "6개월": 180, "1년": 365}
 Z_ALERT = 2.0  # 오늘 변화가 1년 일간 변동(표준편차)의 이 배수를 넘으면 '이례적'
@@ -73,17 +73,7 @@ def _morning_brief() -> None:
                 st.caption("한화 아침 시황 원문 대기 중 (보통 08:05\\~08:50 게시, 공휴일엔 없음) · 위 숫자는 대시보드 데이터"
                            + (f" · :orange[채널 읽기 실패: {brief['error'][:80]}]" if brief.get("error") else ""))
                 return
-            for col, k in zip(st.columns(len(HANWHA_KINDS), gap="small"), HANWHA_KINDS):
-                with col:
-                    c = cards.get(k)
-                    if c is None:
-                        st.markdown(f"**{k}**")
-                        st.caption("아직 게시 전")
-                        continue
-                    st.markdown(f"**{k}**  \n" + "  \n".join(f"`{_esc(n)}`" for n in c["numbers"]))
-                    if not config.PUBLIC_MODE:  # 공개 배포에선 원문 전체를 싣지 않는다 (저작권)
-                        st.markdown(f"<small>{_esc(c['comment'])}</small>", unsafe_allow_html=True)
-                    st.caption(f"[원문 · {c['time']:%H:%M}]({c['link']})")
+            render_brief_cards(cards, HANWHA_KINDS)
         else:
             f = brief.get("ficc")
             st.markdown(f"**☀️ 주말 시황** · 금요일 미국장 마감  \n{_esc(numbers_line())}")
@@ -286,13 +276,13 @@ with recent_col:
 
 st.divider()
 
-# ── 오늘의 이슈 (뉴스 헤드라인 → AI 이슈 묶음, 하루 3회) ──────
+# ── 오늘의 이슈 (뉴스 헤드라인 → AI 이슈 묶음, 하루 2회) ──────
 st.subheader("🗞️ 오늘의 이슈")
 news_sum = load_news_summary()
 if news_sum and news_sum.get("issues"):
     made = pd.Timestamp(news_sum["generated_at"])
     st.caption(f"{made:%m/%d %H:%M} 기준 · 최근 {news_sum['window_hours']}시간 기사 {news_sum['article_count']}건을 "
-               "이슈별로 묶음 (막대 = 관련 기사 수) · 하루 3회 08:30·13:30·18:30 갱신 · AI 요약이라 원문 링크로 확인")
+               "이슈별로 묶음 (막대 = 관련 기사 수) · 하루 2회 08:30·16:00 갱신 · AI 요약이라 원문 링크로 확인")
     if (pd.Timestamp.now() - made).total_seconds() > 15 * 3600:
         st.warning("이슈 요약이 오래됐습니다. 맥이 꺼져 있었거나 요약 실행이 실패했을 수 있습니다 (데이터 상태 화면 참고).")
     render_issues(news_sum)
@@ -305,17 +295,17 @@ else:  # 요약이 아직 없으면 최신 헤드라인 목록으로 대신
             render_news(news[news["category"] == cat].head(8) if not news.empty else news, show_summary=False)
 st.page_link("views/news.py", label="뉴스 전체 보기 →")
 
-# ── 리서치 코멘트 요약 (채권·매크로 텔레그램 6개 채널 → AI 요약, 하루 3회) ──────
+# ── 리서치 코멘트 요약 (채권·매크로 텔레그램 6개 채널 → AI 요약, 하루 2회) ──────
 with st.expander("📮 리서치 코멘트 요약", expanded=True):
     summary = load_summary()
     if summary is None:
-        st.info("아직 요약이 없습니다. 하루 3회(08:30·13:30·18:30) 자동으로 만들어집니다.")
+        st.info("아직 요약이 없습니다. 하루 2회(08:30·16:00) 자동으로 만들어집니다.")
     else:
         made = pd.Timestamp(summary["generated_at"])
         age_h = (pd.Timestamp.now() - made).total_seconds() / 3600
         channels = " · ".join(f"{k} {v}" for k, v in summary.get("channels", {}).items())
         st.caption(f"{made:%m/%d %H:%M} 기준 · 최근 {summary.get('window_hours', 24)}시간 글 "
-                   f"{summary.get('post_count', 0)}개 ({channels}) · 하루 3회 08:30·13:30·18:30 갱신")
+                   f"{summary.get('post_count', 0)}개 ({channels}) · 하루 2회 08:30·16:00 갱신")
         if age_h > 15:
             st.warning(f"요약이 {age_h:.0f}시간 전 것입니다. 맥이 꺼져 있었거나 요약 실행이 실패했을 수 있습니다 (데이터 상태 화면 참고).")
         render_summary(summary)
@@ -334,7 +324,7 @@ if not config.PUBLIC_MODE:
     with st.expander("🧭 바이사이드 관점", expanded=True):
         views = load_summary(config.BUYSIDE_SUMMARY_FILE)
         if views is None:
-            st.info("아직 정리된 관점이 없습니다. 하루 3회(08:30·13:30·18:30) 자동으로 만들어집니다.")
+            st.info("아직 정리된 관점이 없습니다. 하루 2회(08:30·16:00) 자동으로 만들어집니다.")
         else:
             made = pd.Timestamp(views["generated_at"])
             channels = " · ".join(f"{k} {v}" for k, v in views.get("channels", {}).items())

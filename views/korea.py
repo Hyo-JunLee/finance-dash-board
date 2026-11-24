@@ -6,9 +6,23 @@ import streamlit as st
 import config
 from data import krx
 from data.market import fmt_asof, get_snapshot
-from ui import DOWN_COLOR, UP_COLOR, returns_bar, show_chart, treemap
+from data.morning_brief import CLOSING_KINDS, load_closing
+from ui import DOWN_COLOR, UP_COLOR, render_brief_cards, returns_bar, show_chart, treemap
 
 st.title("국내 증시")
+
+# ── 마감 시황 (원문 카드, AI 없음): 한화 ★ 채권·주식 마감 시황, 가장 최근 거래일 것 ──
+_closing = load_closing(datetime.now().date())
+with st.container(border=True):
+    if _closing["cards"]:
+        today = _closing["day"] == datetime.now().date()
+        st.markdown(f"**🔔 마감 시황** · {_closing['day']:%m/%d}" + ("" if today else " :gray[(직전 거래일 · 오늘 것은 보통 15:45\\~17:10 게시)]")
+                    + " · 한화투자증권 리서치 (원문)")
+        render_brief_cards(_closing["cards"], CLOSING_KINDS)
+    else:
+        st.markdown("**🔔 마감 시황**")
+        st.caption("최근 5일 안에 한화 마감 시황 원문이 없습니다"
+                   + (f" · :orange[채널 읽기 실패: {_closing['error'][:80]}]" if _closing.get("error") else ""))
 
 if not config.KRX_API_KEY:
     st.info("KRX_API_KEY가 없어 국내 증시 데이터를 불러올 수 없습니다 (.env 확인).")

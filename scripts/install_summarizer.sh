@@ -1,5 +1,5 @@
 #!/bin/zsh
-# AI 요약(summarize.py: 텔레그램 리서치 + 뉴스 이슈)을 launchd에 등록: 매일 08:30 · 13:30 · 18:30
+# AI 요약(summarize.py: 뉴스 이슈 + 텔레그램 리서치 + 바이사이드 관점, 아침엔 10년물 판단도)을 launchd에 등록: 매일 08:30 · 16:00
 # 맥이 잠자기였다면 깨어난 뒤 밀린 실행을 한 번 한다. 해제: zsh scripts/install_summarizer.sh uninstall
 set -e
 LABEL="com.kevinlee.market-dashboard-summarizer"
@@ -34,8 +34,7 @@ cat > "$PLIST" <<PLIST
     <key>StartCalendarInterval</key>
     <array>
         <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>30</integer></dict>
-        <dict><key>Hour</key><integer>13</integer><key>Minute</key><integer>30</integer></dict>
-        <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
     </array>
     <key>StandardOutPath</key><string>$PROJECT/collected/summarize.log</string>
     <key>StandardErrorPath</key><string>$PROJECT/collected/summarize.log</string>
@@ -45,4 +44,4 @@ PLIST
 
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
-echo "등록 완료: $LABEL (매일 08:30·13:30·18:30, 로그: collected/summarize.log)"
+echo "등록 완료: $LABEL (매일 08:30·16:00, 로그: collected/summarize.log)"

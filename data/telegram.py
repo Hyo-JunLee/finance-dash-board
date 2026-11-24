@@ -72,7 +72,7 @@ def fetch_since(handle: str, since: pd.Timestamp, max_pages: int = 4) -> list[di
 
 
 def load_summary(path=None) -> dict | None:
-    """summarize.py가 하루 3회 만드는 최신 요약 (기본: 리서치). 없으면 None."""
+    """summarize.py가 하루 2회(08:30·16:00) 만드는 최신 요약 (기본: 리서치). 없으면 None."""
     import json
     try:
         return json.loads((path or config.SUMMARY_FILE).read_text())

@@ -1,4 +1,4 @@
-"""AI 요약 (Claude Code 헤드리스 실행) — 하루 3회 08:30·13:30·18:30, scripts/install_summarizer.sh
+"""AI 요약 (Claude Code 헤드리스 실행) — 하루 2회 08:30·16:00, scripts/install_summarizer.sh
 
 1) 텔레그램 리서치 6개 채널 최근 24시간 글 → 채권·매크로 논점 3~5개
 2) 뉴스 헤드라인 최근 12시간 → 국내·해외 이슈 각 4~5개 (기사 수로 화제성 표시)
@@ -447,7 +447,7 @@ def main() -> int:
     wait_for_network()
     failed = []
     jobs = [summarize_telegram, summarize_news, summarize_buyside]
-    if datetime.now().hour < 11 or "--insight" in sys.argv:  # 하루 3회 중 아침 08:30 실행에서만
+    if datetime.now().hour < 11 or "--insight" in sys.argv:  # 하루 2회 중 아침 08:30 실행에서만
         jobs += [summarize_bond_view]  # 앞의 요약 결과도 재료로 쓰므로 마지막
     # 아침 인사이트는 AI 없이 화면에서 원문 카드로 보여준다 (data/morning_brief.py)
     for job in jobs:

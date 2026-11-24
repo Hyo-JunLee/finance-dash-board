@@ -76,7 +76,7 @@ BUYSIDE_CHANNELS = {
     "The_MariTimes": "Polaristimes",
 }
 TTL_TELEGRAM = 60 * 10
-# 화면용 최신 AI 요약 (summarize.py가 하루 3회 갱신)
+# 화면용 최신 AI 요약 (summarize.py가 하루 2회 08:30·16:00 갱신)
 SUMMARY_FILE = CACHE_DIR / "telegram_summary.json"
 NEWS_SUMMARY_FILE = CACHE_DIR / "news_summary.json"
 BUYSIDE_SUMMARY_FILE = CACHE_DIR / "buyside_summary.json"

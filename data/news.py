@@ -122,7 +122,7 @@ def get_news() -> pd.DataFrame:
 
 
 def load_news_summary() -> dict | None:
-    """summarize.py가 하루 3회 만드는 뉴스 이슈 요약. 없으면 None."""
+    """summarize.py가 하루 2회(08:30·16:00) 만드는 뉴스 이슈 요약. 없으면 None."""
     import json
     try:
         return json.loads(config.NEWS_SUMMARY_FILE.read_text())

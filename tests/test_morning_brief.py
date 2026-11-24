@@ -62,3 +62,31 @@ def test_pick_ficc_uses_that_day_post():
 ])
 def test_plan_by_weekday(now, expected):
     assert plan(now) == expected
+
+
+@pytest.mark.parametrize("now, brief, status", [
+    (datetime(2026, 11, 28, 7), {"ficc": None}, "ok"),                       # 토 07시: 게시 전
+    (datetime(2026, 11, 28, 10), {"ficc": None}, "warn"),                    # 토 10시: 없음
+    (datetime(2026, 11, 29, 10), {"ficc": {"title": "t", "first": ["국채금리는"], "rest": [],
+                                           "time": pd.Timestamp("2026-11-28 06:30")}}, "warn"),  # 문단 하나만
+    (datetime(2026, 11, 28, 10), {"ficc": {"title": "t", "first": ["국채금리는", "달러화는"], "rest": [],
+                                           "time": pd.Timestamp("2026-11-28 06:30")}}, "ok"),
+    (datetime(2026, 11, 28, 10), {"error": "timeout"}, "fail"),
+    (datetime(2026, 11, 25, 9), {"cards": {}}, "ok"),                        # 평일 09시: 게시 전
+    (datetime(2026, 11, 25, 10), {"cards": {"채권": {}}}, "warn"),           # 평일 10시: 일부만
+])
+def test_health_check_morning_brief(monkeypatch, now, brief, status):
+    import data.morning_brief as mb
+    from data.health import check_morning_brief
+    monkeypatch.setattr(mb, "load_brief", lambda kind, day: brief)
+    assert check_morning_brief(now)["상태"] == status
+
+
+def test_closing_picks_latest_day_and_ignores_morning():
+    from data.morning_brief import pick_latest_closing
+    posts = [_post("★ 채권 마감 시황 (11/23)\n- 국고채 3년물 3.624% -1.3bp\n- 강세 마감", "2026-11-23 15:45", 1),
+             _post("★ 주식 마감 시황 (11/23)\n- KOSPI 4,708.54pt -3.31%\n- 하락 마감", "2026-11-23 15:46", 2),
+             _post("★ 채권 아침 시황 (11/24)\n- 미 국채 2년물 4.694% +4.7bp\n- 혼조", "2026-11-24 08:11", 3)]
+    day, cards = pick_latest_closing(posts)  # 11/24 마감은 아직 → 11/23 것
+    assert day == date(2026, 11, 23) and list(cards) == ["채권", "주식"]
+    assert cards["주식"]["numbers"] == ["KOSPI 4,708.54pt -3.31%"]

@@ -406,3 +406,24 @@ def mini_chart(s, up: bool, days: int, height: int = 96):
     fig.update_xaxes(showgrid=False, ticks="", nticks=4, tickfont=dict(size=10, color=_MUTED),
                      tickformat="%-m/%-d" if days <= 95 else "%y.%-m", linecolor=_GRID)
     return fig
+
+
+def render_brief_cards(cards: dict, kinds: tuple) -> None:
+    """한화 ★ 시황 원문 카드 (종류별 한 칸): 숫자 줄 → 해설 → 원문 링크. 공개 배포에선 해설을 싣지 않는다 (저작권)."""
+    import config
+
+    def esc(text: str) -> str:
+        return text.replace("$", "\\$").replace("~", "\\~")  # 달러·물결이 수식·취소선으로 바뀌지 않게
+
+    for col, k in zip(st.columns(len(kinds), gap="small"), kinds):
+        with col:
+            c = cards.get(k)
+            if c is None:
+                st.markdown(f"**{k}**")
+                st.caption("아직 게시 전")
+                continue
+            st.markdown(f"**{k}**  \n" + "  \n".join(f"`{esc(n)}`" for n in c["numbers"]))
+            if not config.PUBLIC_MODE:
+                st.markdown(f"<small>{esc(c['comment'])}</small>", unsafe_allow_html=True)
+            st.caption(f"[원문 · {c['time']:%H:%M}]({c['link']})")
+

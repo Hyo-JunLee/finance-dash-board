@@ -129,8 +129,8 @@ def check_news():
 
 
 def check_telegram():
-    """AI 요약(리서치·뉴스, 하루 3회)이 제때 만들어지는지 + 채널 글을 읽을 수 있는지.
-    밤사이(18:30→08:30) 14시간 공백은 정상이라 15시간까지 정상으로 본다."""
+    """AI 요약(리서치·뉴스·바이사이드, 하루 2회)이 제때 만들어지는지 + 채널 글을 읽을 수 있는지.
+    밤사이(16:00→08:30) 16.5시간 공백은 정상이라 17시간까지 정상으로 본다."""
     import json
     from data.telegram import fetch_channel
     name, used = "AI 요약 (리서치·뉴스·바이사이드)", "오늘의 시황 (이슈·리서치·관점 요약)"
@@ -147,7 +147,7 @@ def check_telegram():
         ages.append((hours, made))
         parts.append(f"{label} {hours:.0f}시간 전")
     oldest_h, oldest = max(ages)
-    status = OK if oldest_h <= 15 else WARN if oldest_h <= 30 else FAIL
+    status = OK if oldest_h <= 17 else WARN if oldest_h <= 30 else FAIL
     for label, path in (("10년물 판단", config.BOND_VIEW_FILE),):
         try:  # 아침 08:30 하루 1회라 26시간까지 정상
             made = datetime.fromisoformat(json.loads(path.read_text())["generated_at"])
@@ -157,7 +157,7 @@ def check_telegram():
                 status = WARN
         except (FileNotFoundError, ValueError, KeyError):
             parts.append(f"{label} 없음")
-    return _result(name, used, status, f"{oldest:%m/%d %H:%M}", " · ".join(parts) + " (하루 3회 08:30·13:30·18:30)")
+    return _result(name, used, status, f"{oldest:%m/%d %H:%M}", " · ".join(parts) + " (하루 2회 08:30·16:00)")
 
 
 def check_acm():
@@ -216,15 +216,45 @@ def _uid() -> int:
     return os.getuid()
 
 
+def check_morning_brief(now: datetime | None = None):
+    """오늘의 시황 맨 위 원문 카드: 평일 한화 아침 시황 3개, 토·일 @ehdwl FICC (국채금리·달러 문단까지 읽히는지).
+    게시 전 시각(평일 09:30, 토요일 08:00 이전)에는 정상으로 본다."""
+    from data.morning_brief import HANWHA_KINDS, load_brief, plan
+    now = now or datetime.now()
+    kind, day = plan(now)
+    name, used = "아침 시황 원문", "오늘의 시황(맨 위 카드)"
+    brief = load_brief(kind, day)
+    if brief.get("error"):
+        return _result(name, used, FAIL, "-", f"채널 읽기 실패: {brief['error'][:100]}")
+    if kind == "hanwha":
+        cards = brief.get("cards") or {}
+        missing = [k for k in HANWHA_KINDS if k not in cards]
+        if not missing:
+            return _result(name, used, OK, f"{max(c['time'] for c in cards.values()):%m/%d %H:%M}", "한화 채권·주식·환율 3개 정상")
+        pending = now < now.replace(hour=9, minute=30, second=0, microsecond=0)
+        return _result(name, used, OK if pending else WARN, "-",
+                       f"한화 {'·'.join(missing)} 아침 시황 " + ("게시 전 (보통 08:05~08:50)" if pending else "없음 — 공휴일이거나 제목 형식 변경"))
+    f = brief.get("ficc")
+    if f is None:
+        pending = now.weekday() == 5 and now.hour < 8
+        return _result(name, used, OK if pending else WARN, "-",
+                       f"{day:%m/%d} @ehdwl FICC " + ("게시 전 (보통 06:30경)" if pending else "없음 — 휴재이거나 '*FICC:' 형식 변경"))
+    if len(f["first"]) < 2:
+        return _result(name, used, WARN, f"{f['time']:%m/%d %H:%M}",
+                       f"FICC 제목은 읽었지만 국채금리·달러 문단 {len(f['first'])}/2개 — 문단 형식 변경 가능")
+    return _result(name, used, OK, f"{f['time']:%m/%d %H:%M}", f"FICC 정상: {f['title'][:40]}")
+
+
 CHECKS = [check_collector, check_dashboard_service, check_treasury, check_cnbc, check_fred, check_yahoo,
           check_naver, check_krx, check_nasdaq, check_forexfactory, check_news, check_telegram, check_acm,
-          check_auctions]
+          check_auctions, check_morning_brief]
 
 
 NAMES = {"collector": "수집기 (3시간마다)", "dashboard_service": "대시보드 자동 실행", "treasury": "미 재무부 국채 금리",
          "cnbc": "CNBC 실시간 금리", "fred": "FRED 경제지표", "yahoo": "Yahoo 시세", "naver": "네이버 (국내 지수)",
          "krx": "KRX Open API", "nasdaq": "Nasdaq 경제 캘린더", "forexfactory": "ForexFactory 일정",
-         "news": "뉴스 RSS", "telegram": "AI 요약 (리서치·뉴스·바이사이드)", "acm": "뉴욕 연은 ACM 텀 프리미엄", "auctions": "재무부 입찰 결과"}
+         "news": "뉴스 RSS", "telegram": "AI 요약 (리서치·뉴스·바이사이드)", "acm": "뉴욕 연은 ACM 텀 프리미엄", "auctions": "재무부 입찰 결과",
+         "morning_brief": "아침 시황 원문"}
 
 
 def check_all() -> pd.DataFrame:
