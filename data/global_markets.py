@@ -84,7 +84,27 @@ SHARES_CACHE = config.CACHE_DIR / "shares_outstanding.json"
 def get_closes(tickers: tuple[str, ...], period: str = "2y") -> pd.DataFrame:
     """종가(수정주가) 일괄 조회. 열=티커."""
     df = yf.download(list(tickers), period=period, auto_adjust=True, progress=False, threads=True)["Close"]
-    return df if isinstance(df, pd.DataFrame) else df.to_frame(tickers[0])
+    df = df if isinstance(df, pd.DataFrame) else df.to_frame(tickers[0])
+    if len(df) and df.iloc[-1].isna().any():
+        from data.market import get_intraday_last  # 1분봉 일괄 조회 재사용
+        try:
+            df = fill_missing_last(df, get_intraday_last(tuple(df.columns[df.iloc[-1].isna()])))
+        except Exception:
+            pass
+    return df
+
+
+def fill_missing_last(df: pd.DataFrame, live: dict[str, tuple[float, pd.Timestamp]]) -> pd.DataFrame:
+    """Yahoo가 개별 종목·ETF의 마지막 거래일 일봉을 거래량만 넣고 종가는 비워 보내는 경우가 있다
+    (지수는 정상, 다음 날 아침까지 지속). 같은 날 1분봉이 있으면 그 마지막 값(정규장 종가와 거의 같음)으로 채운다.
+    live: {티커: (값, UTC 시각)} — get_intraday_last 결과. 1분봉 날짜(뉴욕)가 마지막 행 날짜와 같을 때만 채운다."""
+    if df.empty:
+        return df
+    df, last = df.copy(), df.index[-1]
+    for t, (value, ts) in live.items():
+        if t in df and pd.isna(df.at[last, t]) and ts.tz_convert("America/New_York").date() == last.date():
+            df.at[last, t] = value
+    return df
 
 
 def period_return(s: pd.Series, period) -> float | None:
