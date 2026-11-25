@@ -60,7 +60,7 @@ streamlit run app.py        # http://localhost:8501
 
 - 수집기(3시간마다 CSV 누적 + 상태 점검 알림): `python collect.py`, 자동 실행 등록 `zsh scripts/install_collector.sh`
 - 대시보드 자동 실행(macOS 로그인 시): `zsh scripts/install_dashboard.sh`
-- AI 요약(오늘의 이슈·리서치 코멘트·바이사이드 관점, 하루 2회 08:30·16:00, 로그인된 Claude Code `claude -p` 사용 · 도구 없음 · 출처 id 검증): `python summarize.py`, 자동 실행 등록 `zsh scripts/install_summarizer.sh`
+- AI 요약(오늘의 이슈·리서치 코멘트·바이사이드 관점, 하루 2회 08:30·16:00 — 맥이 꺼져 있었거나 인터넷 없이 실패하면 30분마다 따라잡기, 로그인된 Claude Code `claude -p` 사용 · 도구 없음 · 출처 id 검증): `python summarize.py`, 자동 실행 등록 `zsh scripts/install_summarizer.sh`
 - 테스트: `pip install -r requirements-dev.txt && python -m pytest`
 
 ## 공개 배포 (Streamlit Community Cloud)

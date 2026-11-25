@@ -1,6 +1,6 @@
 #!/bin/zsh
 # AI 요약(summarize.py: 뉴스 이슈 + 텔레그램 리서치 + 바이사이드 관점, 아침엔 10년물 판단도)을 launchd에 등록: 매일 08:30 · 16:00
-# 맥이 잠자기였다면 깨어난 뒤 밀린 실행을 한 번 한다. 해제: zsh scripts/install_summarizer.sh uninstall
+# 정시 실행이 실패·누락돼도 30분마다 따라잡기 점검으로 그 회차를 다시 돌린다(summarize.py --catchup). 해제: zsh scripts/install_summarizer.sh uninstall
 set -e
 LABEL="com.kevinlee.market-dashboard-summarizer"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
@@ -24,6 +24,7 @@ cat > "$PLIST" <<PLIST
     <array>
         <string>$PYTHON</string>
         <string>$PROJECT/summarize.py</string>
+        <string>--catchup</string>
     </array>
     <key>WorkingDirectory</key><string>$PROJECT</string>
     <key>EnvironmentVariables</key>
@@ -36,6 +37,9 @@ cat > "$PLIST" <<PLIST
         <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>30</integer></dict>
         <dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
     </array>
+    <!-- 30분마다 따라잡기 점검: 정시에 맥이 꺼져 있었거나 인터넷 없이 깨어나 실패했으면 그 회차를 다시 돌린다
+         (이미 성공한 회차면 아무것도 하지 않음) -->
+    <key>StartInterval</key><integer>1800</integer>
     <key>StandardOutPath</key><string>$PROJECT/collected/summarize.log</string>
     <key>StandardErrorPath</key><string>$PROJECT/collected/summarize.log</string>
 </dict>
@@ -44,4 +48,4 @@ PLIST
 
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
-echo "등록 완료: $LABEL (매일 08:30·16:00, 로그: collected/summarize.log)"
+echo "등록 완료: $LABEL (매일 08:30·16:00 + 30분마다 따라잡기, 로그: collected/summarize.log)"

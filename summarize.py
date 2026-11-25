@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import sys
 import warnings
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
@@ -442,13 +442,71 @@ def wait_for_network(host: str = "t.me", timeout: int = 300) -> bool:
             time.sleep(10)
 
 
-def main() -> int:
-    log.info("=== AI 요약 시작 ===")
-    wait_for_network()
-    failed = []
+SLOTS = ((8, 30), (16, 0))  # 정해진 실행 시각 (launchd StartCalendarInterval과 같게)
+CATCHUP_MAX_ATTEMPTS = 6    # 한 회차당 따라잡기 재시도 상한 (30분 간격 → 약 3시간)
+CATCHUP_STATE = config.CACHE_DIR / "summarize_catchup.json"
+
+
+def due_slot(now: datetime) -> datetime:
+    """지금 기준 가장 최근에 지나간 실행 회차 시각 (08:30 이전이면 전날 16:00)."""
+    today = [now.replace(hour=h, minute=m, second=0, microsecond=0) for h, m in SLOTS]
+    past = [t for t in today if t <= now]
+    if past:
+        return past[-1]
+    return today[-1] - timedelta(days=1)
+
+
+def slot_jobs(slot: datetime) -> list:
     jobs = [summarize_telegram, summarize_news, summarize_buyside]
-    if datetime.now().hour < 11 or "--insight" in sys.argv:  # 하루 2회 중 아침 08:30 실행에서만
+    if slot.hour < 11:  # 하루 2회 중 아침 08:30 회차에서만
         jobs += [summarize_bond_view]  # 앞의 요약 결과도 재료로 쓰므로 마지막
+    return jobs
+
+
+JOB_FILES = {"summarize_telegram": config.SUMMARY_FILE, "summarize_news": config.NEWS_SUMMARY_FILE,
+             "summarize_buyside": config.BUYSIDE_SUMMARY_FILE, "summarize_bond_view": config.BOND_VIEW_FILE}
+
+
+def pending_jobs(slot: datetime, jobs: list) -> list:
+    """그 회차 시각 이후 결과 파일이 갱신되지 않은 작업 (성공하면 항상 파일을 쓰고, 실패하면 직전 것을 둔다)."""
+    def done(job):
+        f = JOB_FILES[job.__name__]
+        return f.exists() and datetime.fromtimestamp(f.stat().st_mtime) >= slot
+    return [j for j in jobs if not done(j)]
+
+
+def _catchup_attempts(slot: datetime, add: int = 0) -> int:
+    key = slot.isoformat(timespec="minutes")
+    try:
+        state = json.loads(CATCHUP_STATE.read_text())
+    except Exception:
+        state = {}
+    n = (state.get("attempts", 0) if state.get("slot") == key else 0) + add
+    if add:
+        CATCHUP_STATE.write_text(json.dumps({"slot": key, "attempts": n}))
+    return n
+
+
+def main() -> int:
+    """기본: 가장 최근 회차의 작업을 모두 실행.
+    --catchup: 그 회차에 아직 성공하지 못한 작업만 실행 (launchd가 정시 + 30분마다 호출 — 맥이 꺼져 있거나
+    인터넷 없이 깨어나 정시 실행이 실패해도 연결되면 따라잡는다). 할 일이 없으면 조용히 끝낸다."""
+    slot = due_slot(datetime.now())
+    jobs = slot_jobs(slot)
+    if "--insight" in sys.argv and summarize_bond_view not in jobs:
+        jobs += [summarize_bond_view]
+    if "--catchup" in sys.argv:
+        jobs = pending_jobs(slot, jobs)
+        if not jobs or _catchup_attempts(slot) >= CATCHUP_MAX_ATTEMPTS:
+            return 0
+        if not wait_for_network(timeout=60):  # 인터넷 없는 잠깐 깨어남: 시도 횟수를 쓰지 않고 다음 점검으로
+            return 0
+        _catchup_attempts(slot, add=1)
+        log.info(f"=== AI 요약 ({slot:%m/%d %H:%M} 회차, {len(jobs)}개: {', '.join(j.__name__ for j in jobs)}) ===")
+    else:
+        log.info("=== AI 요약 시작 ===")
+        wait_for_network()
+    failed = []
     # 아침 인사이트는 AI 없이 화면에서 원문 카드로 보여준다 (data/morning_brief.py)
     for job in jobs:
         try:
