@@ -1,9 +1,11 @@
-"""이례적 변동 휴대폰 알림 (텔레그램 봇). launchd가 10분마다 실행 (scripts/install_alerts.sh).
+"""10분마다 실행 (launchd, scripts/install_alerts.sh): 이례적 변동 알림 + 미국 지표 발표 AI 해석.
 
+1) 이례적 변동 휴대폰 알림 (텔레그램 봇)
 - 오늘의 시황 카드 항목 중 오늘 변화가 평소 하루 변동의 Z_ALERT배(⚡와 같은 기준) 이상이면 보낸다
 - 같은 항목·같은 기준일·같은 방향은 한 번만 (.cache/alert_state.json)
 - 시간대 제한 없이 생기는 즉시 보냄 (미국장 새벽 변동 포함)
-- .env에 TELEGRAM_BOT_TOKEN·TELEGRAM_CHAT_ID가 없으면 아무것도 하지 않는다
+- .env에 TELEGRAM_BOT_TOKEN·TELEGRAM_CHAT_ID가 없으면 보내지 않는다
+2) 🧠 발표 해석 (data/release_insight.py): 중요 지표 발표 30분 뒤 한 번 claude -p 로 해석 → 화면·텔레그램
 
   python alerts.py            # 점검 후 보냄
   python alerts.py --test     # 테스트 메시지 1건
@@ -73,23 +75,31 @@ def check(now: datetime | None = None) -> list[str]:
 
 
 def main() -> int:
-    if not (config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID):
-        if "--chat-id" in sys.argv and config.TELEGRAM_BOT_TOKEN:
-            r = requests.get(f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/getUpdates", timeout=15).json()
-            ids = {(u["message"]["chat"]["id"], u["message"]["chat"].get("first_name", ""))
-                   for u in r.get("result", []) if "message" in u}
-            print(ids or "봇에게 아무 메시지나 먼저 보낸 뒤 다시 실행하세요")
-        return 0  # 설정 전에는 조용히 끝냄
-    if "--test" in sys.argv:
+    telegram = bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
+    if "--chat-id" in sys.argv and config.TELEGRAM_BOT_TOKEN:
+        r = requests.get(f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/getUpdates", timeout=15).json()
+        ids = {(u["message"]["chat"]["id"], u["message"]["chat"].get("first_name", ""))
+               for u in r.get("result", []) if "message" in u}
+        print(ids or "봇에게 아무 메시지나 먼저 보낸 뒤 다시 실행하세요")
+        return 0
+    if "--test" in sys.argv and telegram:
         send(f"✅ 시황 대시보드 알림 연결 확인 ({datetime.now():%m/%d %H:%M})" + (f"\n📊 {DASHBOARD_URL}" if DASHBOARD_URL else ""))
         print("테스트 메시지를 보냈습니다")
         return 0
-    try:
-        check()
+    failed = False
+    if telegram:
+        try:
+            check()
+        except Exception as e:
+            log.exception(f"알림 점검 실패: {e}")
+            failed = True
+    try:  # 발표 해석은 텔레그램 설정이 없어도 만들어 화면에 둔다
+        from data.release_insight import check_and_run
+        check_and_run(send=send if telegram else None, log=log)
     except Exception as e:
-        log.exception(f"알림 점검 실패: {e}")
-        return 1
-    return 0
+        log.exception(f"발표 해석 실패: {e}")
+        failed = True
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

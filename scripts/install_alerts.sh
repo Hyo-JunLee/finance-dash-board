@@ -1,5 +1,5 @@
 #!/bin/zsh
-# 이례적 변동 휴대폰 알림(alerts.py)을 launchd에 등록: 10분마다 점검 (.env에 텔레그램 토큰·채팅 id가 있을 때만 보냄)
+# alerts.py를 launchd에 등록: 10분마다 이례적 변동 알림(.env에 텔레그램 설정이 있을 때) + 미국 지표 발표 AI 해석
 # 해제: ./scripts/install_alerts.sh uninstall
 set -e
 LABEL="com.kevinlee.market-dashboard-alerts"
@@ -26,6 +26,11 @@ cat > "$PLIST" <<PLIST
         <string>$PROJECT/alerts.py</string>
     </array>
     <key>WorkingDirectory</key><string>$PROJECT</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- 발표 해석에 쓰는 claude CLI(/opt/homebrew/bin)와 node를 찾을 수 있게 -->
+        <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
     <key>StartInterval</key><integer>600</integer>
     <key>RunAtLoad</key><true/>
     <key>StandardOutPath</key><string>$PROJECT/collected/alerts.log</string>

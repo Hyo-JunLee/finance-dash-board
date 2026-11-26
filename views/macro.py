@@ -8,7 +8,7 @@ from data import macro as m
 import config
 from data.econ_calendar import get_macro_releases, refresh_bucket
 from data.surprise import get_surprises
-from ui import RELEASE_CSS, bar_chart, curve_chart, kpi, line_chart, release_board, show_chart
+from ui import RELEASE_CSS, bar_chart, curve_chart, kpi, line_chart, release_board, render_release_insights, show_chart
 
 PERIODS = {"1년": 1, "3년": 3, "5년": 5, "10년": 10}
 
@@ -58,6 +58,8 @@ with st.spinner("FRED 지표 불러오는 중... (첫 로딩은 최대 30초)"):
 st.html(RELEASE_CSS)  # 카드 배지·발표 현황 보드 공용 스타일
 @st.fragment(run_every="60s")  # 1분마다 다시 그림: 발표 시간대엔 2분 캐시라 ⚡속보가 바로 반영, 그 밖엔 캐시 그대로라 가벼움
 def _body() -> None:
+    from data.release_insight import load as load_insights
+    render_release_insights(load_insights())
     tabs = st.tabs(["💵 금리", "🔥 물가", "👷 고용", "🏭 성장·소비", "🌡️ 금융 여건", "🎯 서프라이즈"])
 
     # ── 금리 ─────────────────────────────────────────────

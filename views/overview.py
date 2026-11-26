@@ -11,7 +11,7 @@ from data.market import SUMMARY_ITEMS, fmt_asof, get_snapshot
 from data.news import get_news, load_news_summary
 from data.telegram import load_summary, recent_posts
 from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, context_html, mini_chart, render_brief_cards, render_issues,
-                release_board, render_news, render_post_list, render_summary, render_views, show_chart)
+                release_board, render_news, render_post_list, render_release_insights, render_summary, render_views, show_chart)
 
 PERIODS = {"1개월": 30, "3개월": 90, "6개월": 180, "1년": 365}
 
@@ -221,6 +221,8 @@ def _recent_board() -> None:
             st.warning(f"FRED 지표를 불러오지 못했습니다: {str(e)[:80]}")
             return
     recent = recent.sort_values("발표", ascending=False, na_position="last")  # 최근 발표순
+    from data.release_insight import load as load_insights
+    render_release_insights(load_insights(), previous=3)
     release_board(recent, dense=True)
 
 

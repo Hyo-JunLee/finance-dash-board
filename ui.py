@@ -662,3 +662,67 @@ def release_board(df, note: str = "", today=None, dense: bool = False) -> None:
         + (f" · {note}" if note else "")
         + "".join(f"  \n⚠ {n}: {m}" for n, m in zip(warns["지표"], warns["_warn"]))
     )
+
+
+# ── 🧠 최근 발표 해석 (data/release_insight.py 결과) ───────────────────
+INSIGHT_CSS = """<style>
+.ri { border:1px solid rgba(255,255,255,.1); border-left:3px solid #9b7be0; border-radius:.6rem; padding:.75rem .9rem;
+      background:rgba(155,123,224,.06); font-size:.86rem; line-height:1.5; }
+.ri-top { font-size:.74rem; opacity:.65; margin-bottom:.15rem; }
+.ri-head { font-weight:700; font-size:1rem; margin-bottom:.45rem; }
+.ri-row { display:grid; grid-template-columns: 5.6rem 1fr; gap:.6rem; padding:.18rem 0; }
+.ri-lab { font-size:.72rem; font-weight:700; opacity:.8; padding-top:.12rem; }
+.ri-close { margin-top:.3rem; padding-top:.45rem; border-top:1px dashed rgba(255,255,255,.12); }
+.ri-age { font-size:.68rem; font-weight:700; padding:.02rem .4rem; border-radius:999px; background:rgba(155,123,224,.2);
+          color:#c2a9f5; margin-left:.2rem; }
+@media (max-width: 640px) { .ri-row { grid-template-columns: 1fr; gap:.05rem; } }
+</style>"""
+_EVENT_KO = {"cpi": "CPI", "core cpi": "근원 CPI", "pce price index": "PCE", "core pce price index": "근원 PCE",
+             "nonfarm payrolls": "고용보고서", "unemployment rate": "실업률", "gdp": "GDP", "retail sales": "소매판매",
+             "ppi": "PPI", "core ppi": "근원 PPI", "jolts job openings": "JOLTS", "ism manufacturing pmi": "ISM 제조업",
+             "ism non-manufacturing pmi": "ISM 서비스업"}
+
+
+def insight_age(ins: dict, now=None) -> int:
+    """발표 후 지난 날 수 (한국 날짜 기준)."""
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+    t = _dt.strptime(ins["slot"], "%Y-%m-%d %H:%M ET").replace(tzinfo=ZoneInfo("America/New_York"))
+    now = now or pd.Timestamp.now(tz="Asia/Seoul")
+    return (now.date() - t.astimezone(ZoneInfo("Asia/Seoul")).date()).days
+
+
+def _age_label(n: int) -> str:
+    return "오늘" if n <= 0 else "어제" if n == 1 else f"{n}일 전"
+
+
+def _insight_html(ins: dict, top: bool = True) -> str:
+    from data.release_insight import SECTIONS
+    keys = list(dict.fromkeys(_EVENT_KO[e.lower()] for e in ins.get("events", []) if e.lower() in _EVENT_KO))
+    rows = "".join(f'<div class="ri-row"><div class="ri-lab">{lab}</div><div>{_esc(ins.get(k, ""))}</div></div>'
+                   for k, lab in SECTIONS if ins.get(k))
+    if ins.get("close"):
+        rows += (f'<div class="ri-row ri-close"><div class="ri-lab">🔔 장 마감 반응</div>'
+                 f'<div>{_esc(ins["close"]["text"])}</div></div>')
+    age = f'<span class="ri-age">{_age_label(insight_age(ins))}</span>'
+    head = (f'<div class="ri-top">🧠 최근 발표 해석 · {_esc(ins["when_kst"])} (KST) 발표 {age} · {_esc(" · ".join(keys))}</div>'
+            if top else f'<div class="ri-top">{_esc(ins["when_kst"])} (KST) {age} · {_esc(" · ".join(keys))}</div>')
+    return f'<div class="ri">{head}<div class="ri-head">{_esc(ins.get("headline", ""))}</div>{rows}</div>'
+
+
+INSIGHT_FRESH_DAYS = 7  # 이보다 오래된 해석은 맨 위 카드로 보이지 않고 '지난 발표 해석'에만
+
+
+def render_release_insights(items: list[dict], previous: int = 5) -> None:
+    """가장 최근 해석 카드(7일 이내) + 지난 해석 접어 두기. items: 최신순."""
+    if not items:
+        return
+    fresh = insight_age(items[0]) < INSIGHT_FRESH_DAYS
+    if fresh:
+        st.html(INSIGHT_CSS + _insight_html(items[0]))
+    rest = items[1:1 + previous] if fresh else items[:previous]
+    if rest:
+        with st.expander(f"지난 발표 해석 {len(rest)}개" + ("" if fresh else " (최근 7일 안 중요 지표 발표 없음)")):
+            st.html(INSIGHT_CSS + "".join(_insight_html(x, top=False) + "<div style='height:.5rem'></div>" for x in rest))
+    st.caption("AI(Claude) 해석 — 숫자는 코드가 계산해 넘긴 값만 쓰도록 대조 검증 · 발표 30분 뒤 반응으로 해석, "
+               "장 마감(한국 다음 날 아침) 반응을 한 줄 덧붙임 · 투자 판단의 근거가 아닌 참고용")
