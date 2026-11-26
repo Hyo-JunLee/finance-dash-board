@@ -6,8 +6,9 @@ import streamlit as st
 
 from data import macro as m
 import config
+from data.econ_calendar import get_macro_releases, refresh_bucket
 from data.surprise import get_surprises
-from ui import bar_chart, curve_chart, kpi, line_chart, show_chart
+from ui import RELEASE_CSS, bar_chart, curve_chart, kpi, line_chart, release_board, show_chart
 
 PERIODS = {"1년": 1, "3년": 3, "5년": 5, "10년": 10}
 
@@ -25,198 +26,241 @@ def clip(s: pd.Series) -> pd.Series:
     return s[s.index >= cutoff]
 
 
+def _rel(group: str):
+    """탭 발표 현황 (df, {지표명: 행}). 실패하면 (None, {}) — 카드는 배지 없이, 보드는 안내만."""
+    with st.spinner("발표 일정·컨센서스 불러오는 중... (첫 로딩은 10초 정도)"):
+        try:
+            df = get_macro_releases(group, refresh_bucket())
+        except Exception:
+            return None, {}
+    return df, {r["지표"]: r for r in df.to_dict("records")}
+
+
+def _releases(group: str, note: str, df) -> None:
+    """탭별 발표 현황 보드: 지표마다 전월비·전년비, 예상 대비, 발표 시각, 다음 발표 D-day."""
+    st.markdown("**📋 발표 현황** · " + ("최신값 · 반영일 · 다음 발표일" if group == "금융 여건"
+                                          else "전월비·전년비 · 컨센서스 대비 · 다음 발표일"))
+    if df is None:
+        st.warning("발표 현황을 불러오지 못했습니다 (FRED·Nasdaq 응답 없음). 잠시 뒤 새로고침하세요.")
+        return
+    # 전월비와 전년비의 기준 기간이 다르면 이유를 적는다 (예: 1년 전 값이 셧다운으로 미발표 → 공식 전년비 없음)
+    base = df["지표"].str.replace(r" (전월비|전년비)$", "", regex=True)
+    lagged = [b for b, g in df.groupby(base, sort=False) if g["기준"].nunique() > 1 and len(g) == 2]
+    if lagged:
+        note += (f" · {', '.join(lagged)}: 전년비가 전월비보다 기준 기간이 이름 — 1년 전 값이 없으면(예: 2025년 10월 CPI 셧다운 미발표) "
+                 "그 달 공식 전년비가 발표되지 않음")
+    release_board(df, note=note)
+
+
 with st.spinner("FRED 지표 불러오는 중... (첫 로딩은 최대 30초)"):
     m.warmup()
 
-tabs = st.tabs(["💵 금리", "🔥 물가", "👷 고용", "🏭 성장·소비", "🌡️ 금융 여건", "🎯 서프라이즈"])
+st.html(RELEASE_CSS)  # 카드 배지·발표 현황 보드 공용 스타일
+@st.fragment(run_every="60s")  # 1분마다 다시 그림: 발표 시간대엔 2분 캐시라 ⚡속보가 바로 반영, 그 밖엔 캐시 그대로라 가벼움
+def _body() -> None:
+    tabs = st.tabs(["💵 금리", "🔥 물가", "👷 고용", "🏭 성장·소비", "🌡️ 금융 여건", "🎯 서프라이즈"])
 
-# ── 금리 ─────────────────────────────────────────────
-with tabs[0]:
-    fed, y2, y10 = m.fred("DFEDTARU"), m.yields("2Y"), m.yields("10Y")
-    s2_10, s3m_10 = m.curve_spread("10Y", "2Y"), m.curve_spread("10Y", "3M")
-    rate_kw = dict(unit="%", delta_unit="bp", delta_scale=100, delta_decimals=0)
-    c = st.columns(4)
-    with c[0]:
-        kpi("기준금리 상단", fed[fed.diff().fillna(1) != 0], **rate_kw, help="직전 변경 대비")
-    with c[1]:
-        kpi("2년물", y2, **rate_kw)
-    with c[2]:
-        kpi("10년물", y10, **rate_kw)
-    with c[3]:
-        kpi("10Y−2Y", s2_10, unit="%p", delta_unit="bp", delta_scale=100, delta_decimals=0)
-
-    l, r = st.columns(2)
-    with l:
-        show_chart(curve_chart(m.yield_curves(), "수익률 곡선 (재무부 종가)"))
-    with r:
-        show_chart(line_chart(
-            {"기준금리 상단": clip(fed), "2년물": clip(y2), "10년물": clip(y10)},
-            "기준금리와 국채 금리", unit="%",
-        ))
-    show_chart(line_chart(
-        {"10Y−2Y": clip(s2_10), "10Y−3M": clip(s3m_10)},
-        "장단기 금리차", unit="%p", hline=0, hline_label="0 아래 = 역전", height=260,
-    ))
-
-# ── 물가 ─────────────────────────────────────────────
-with tabs[1]:
-    cpi, core, pce = m.fred("CPIAUCNS", "yoy"), m.fred("CPILFENS", "yoy"), m.fred("PCEPILFE", "yoy")
-    bei, fwd = m.breakeven_10y(), m.fred("T5YIFR")
-    pct_kw = dict(unit="%", delta_unit="%p", freq="M")
-    c = st.columns(4)
-    with c[0]:
-        kpi("CPI (전년비)", cpi, **pct_kw)
-    with c[1]:
-        kpi("근원 CPI (전년비)", core, **pct_kw)
-    with c[2]:
-        kpi("근원 PCE (전년비)", pce, **pct_kw, help="연준이 목표로 삼는 물가 지표")
-    with c[3]:
-        kpi("10년 기대인플레(BEI)", bei, unit="%", delta_unit="bp", delta_scale=100, delta_decimals=0,
-            help="명목 10년물 − 물가연동채(TIPS) 10년물")
-
-    l, r = st.columns(2)
-    with l:
-        show_chart(line_chart(
-            {"CPI": clip(cpi), "근원 CPI": clip(core), "근원 PCE": clip(pce)},
-            "물가 상승률 (전년비)", unit="%", hline=2, hline_label="연준 목표 2%",
-        ))
-    with r:
-        show_chart(line_chart(
-            {"10년 BEI": clip(bei), "5년 후 5년 기대인플레": clip(fwd)},
-            "시장 기대인플레이션", unit="%", hline=2, hline_label="2%",
-        ))
-
-# ── 고용 ─────────────────────────────────────────────
-with tabs[2]:
-    nfp, ur = m.fred("PAYEMS", "diff"), m.fred("UNRATE")
-    claims, claims4 = m.fred("ICSA") / 1000, m.fred("IC4WSA") / 1000
-    jolts = m.fred("JTSJOL") / 1000
-    c = st.columns(4)
-    with c[0]:
-        kpi("비농업 고용 증감", nfp, unit="K", decimals=0, freq="M", help="전월 대비 일자리 증감(천 명)")
-    with c[1]:
-        kpi("실업률", ur, unit="%", delta_unit="%p", decimals=1, freq="M")
-    with c[2]:
-        kpi("신규 실업수당 청구", claims, unit="K", decimals=0, help="주간, 천 건")
-    with c[3]:
-        kpi("JOLTS 구인건수", jolts, unit="M", decimals=2, freq="M")
-
-    l, r = st.columns(2)
-    with l:
-        show_chart(bar_chart(clip(nfp), "비농업 고용 증감 (천 명)", unit="K"))
-    with r:
-        show_chart(line_chart({"실업률": clip(ur)}, "실업률", unit="%", decimals=1))
-    l, r = st.columns(2)
-    with l:
-        show_chart(line_chart(
-            {"신규 청구": clip(claims), "4주 평균": clip(claims4)},
-            "신규 실업수당 청구 (천 건)", unit="K", decimals=0,
-        ))
-    with r:
-        show_chart(line_chart({"구인건수": clip(jolts)}, "JOLTS 구인건수 (백만 건)", unit="M"))
-
-# ── 성장·소비 ────────────────────────────────────────
-with tabs[3]:
-    gdp = m.fred("A191RL1Q225SBEA")
-    retail_mom, retail_yoy = m.fred("RSAFS", "mom"), m.fred("RSAFS", "yoy")
-    ip = m.fred("INDPRO", "yoy")
-    houst = m.fred("HOUST") / 1000
-    c = st.columns(4)
-    with c[0]:
-        kpi("실질 GDP (전기비 연율)", gdp, unit="%", delta_unit="%p", decimals=1, freq="Q")
-    with c[1]:
-        kpi("소매판매 (전월비)", retail_mom, unit="%", delta_unit="%p", freq="M")
-    with c[2]:
-        kpi("산업생산 (전년비)", ip, unit="%", delta_unit="%p", freq="M")
-    with c[3]:
-        kpi("주택착공 (연율)", houst, unit="M", decimals=2, freq="M", help="계절조정 연율, 백만 호")
-
-    l, r = st.columns(2)
-    with l:
-        show_chart(bar_chart(clip(gdp), "실질 GDP 성장률 (전기비 연율)", unit="%", decimals=1))
-    with r:
-        show_chart(line_chart(
-            {"소매판매": clip(retail_yoy), "산업생산": clip(ip)},
-            "소매판매·산업생산 (전년비)", unit="%", hline=0,
-        ))
-    show_chart(line_chart({"주택착공": clip(houst)}, "주택착공 (연율, 백만 호)", unit="M", height=240))
-
-# ── 금융 여건 ────────────────────────────────────────
-with tabs[4]:
-    hy, ig, nfci = m.fred("BAMLH0A0HYM2"), m.fred("BAMLC0A0CM"), m.fred("NFCI")
-    vix, move, dxy = m.yahoo("^VIX"), m.yahoo("^MOVE"), m.yahoo("DX-Y.NYB")
-    spread_kw = dict(unit="%p", delta_unit="bp", delta_scale=100, delta_decimals=0)
-    c = st.columns(6)
-    with c[0]:
-        kpi("하이일드 스프레드", hy, **spread_kw)
-    with c[1]:
-        kpi("투자등급 스프레드", ig, **spread_kw)
-    with c[2]:
-        kpi("VIX", vix)
-    with c[3]:
-        kpi("MOVE", move, help="미 국채 변동성 지수")
-    with c[4]:
-        kpi("달러 인덱스", dxy)
-    with c[5]:
-        kpi("금융여건지수(NFCI)", nfci, decimals=3, help="0보다 크면 평균보다 긴축적")
-
-    l, r = st.columns(2)
-    with l:
-        show_chart(line_chart({"하이일드": clip(hy), "투자등급": clip(ig)}, "회사채 신용 스프레드", unit="%p"))
-    with r:
-        show_chart(line_chart({"VIX": clip(vix)}, "VIX (주식 변동성)"))
-    l, mid, r = st.columns(3)
-    with l:
-        show_chart(line_chart({"MOVE": clip(move)}, "MOVE (국채 변동성)", height=240))
-    with mid:
-        show_chart(line_chart({"DXY": clip(dxy)}, "달러 인덱스", height=240))
-    with r:
-        show_chart(line_chart({"NFCI": clip(nfci)}, "금융여건지수", hline=0, hline_label="평균",
-                              decimals=3, height=240))
-    st.caption("신용 스프레드·NFCI는 무료 실시간 소스가 없어 FRED(1일\\~1주 지연) 사용")
-
-# ── 서프라이즈 ───────────────────────────────────────
-with tabs[5]:
-    c1, c2 = st.columns([1, 3], vertical_alignment="bottom")
-    weeks = {"4주": 4, "8주": 8, "12주": 12}[c1.segmented_control("기간", ["4주", "8주", "12주"], default="8주",
-                                                                key="sup_weeks") or "8주"]
-    with st.spinner("발표치 불러오는 중... (처음엔 12주치 약 30초, 이후엔 새 날짜만)"):
-        sup_all = get_surprises(12)
-    cats = ["고용", "물가", "성장·소비", "심리·제조업", "주택"]
-    picked = c2.pills("분야", cats, default=cats, selection_mode="multi", key="sup_cats") or cats
-    if sup_all.empty:
-        st.info("서프라이즈 데이터를 불러오지 못했습니다.")
-    else:
-        since = pd.Timestamp.now() - pd.DateOffset(weeks=weeks)
-        sup = sup_all[(sup_all["발표(KST)"] >= since) & sup_all["분야"].isin(picked)]
-        d = sup["_diff"]
-        beat, miss, inline = (d > 0).sum(), (d < 0).sum(), (d == 0).sum()
+    # ── 금리 ─────────────────────────────────────────────
+    with tabs[0]:
+        fed, y2, y10 = m.fred("DFEDTARU"), m.yields("2Y"), m.yields("10Y")
+        s2_10, s3m_10 = m.curve_spread("10Y", "2Y"), m.curve_spread("10Y", "3M")
+        rate_kw = dict(unit="%", delta_unit="bp", delta_scale=100, delta_decimals=0)
         c = st.columns(4)
-        c[0].metric("발표", f"{len(sup)}건", border=True)
-        c[1].metric("예상 상회", f"{beat}건", f"{beat / max(len(sup), 1) * 100:.0f}%", delta_color="off",
-                    delta_arrow="off", border=True)
-        c[2].metric("예상 하회", f"{miss}건", f"{miss / max(len(sup), 1) * 100:.0f}%", delta_color="off",
-                    delta_arrow="off", border=True)
-        c[3].metric("부합", f"{inline}건", border=True)
+        with c[0]:
+            kpi("기준금리 상단", fed[fed.diff().fillna(1) != 0], **rate_kw, help="직전 변경 대비")
+        with c[1]:
+            kpi("2년물", y2, **rate_kw)
+        with c[2]:
+            kpi("10년물", y10, **rate_kw)
+        with c[3]:
+            kpi("10Y−2Y", s2_10, unit="%p", delta_unit="bp", delta_scale=100, delta_decimals=0)
 
-        # 주간 서프라이즈 균형: (상회 − 하회) 건수. 지표 단위가 달라 크기 대신 방향만 센다
-        weekly = (sup.assign(w=sup["발표(KST)"].dt.to_period("W-FRI").dt.start_time,
-                             s=np.sign(sup["_diff"])).groupby("w")["s"].sum())
-        show_chart(bar_chart(weekly, "주간 서프라이즈 균형 (상회 − 하회 건수)", height=220))
+        l, r = st.columns(2)
+        with l:
+            show_chart(curve_chart(m.yield_curves(), "수익률 곡선 (재무부 종가)"))
+        with r:
+            show_chart(line_chart(
+                {"기준금리 상단": clip(fed), "2년물": clip(y2), "10년물": clip(y10)},
+                "기준금리와 국채 금리", unit="%",
+            ))
+        show_chart(line_chart(
+            {"10Y−2Y": clip(s2_10), "10Y−3M": clip(s3m_10)},
+            "장단기 금리차", unit="%p", hline=0, hline_label="0 아래 = 역전", height=260,
+        ))
 
-        def _sup_style(df: pd.DataFrame) -> pd.DataFrame:
-            styles = pd.DataFrame("", index=df.index, columns=df.columns)
-            for i, v in sup["_diff"].items():
-                if v:
-                    color = "#e66767" if v > 0 else "#3987e5"
-                    styles.at[i, "서프라이즈"] = f"color: {color}; font-weight: 600"
-            return styles
+    # ── 물가 ─────────────────────────────────────────────
+    with tabs[1]:
+        rel_df, rel = _rel("물가")
+        cpi, core, pce = m.fred("CPIAUCNS", "yoy"), m.fred("CPILFENS", "yoy"), m.fred("PCEPILFE", "yoy")
+        bei, fwd = m.breakeven_10y(), m.fred("T5YIFR")
+        pct_kw = dict(unit="%", delta_unit="%p", freq="M")
+        c = st.columns(4)
+        with c[0]:
+            kpi("CPI (전년비)", cpi, **pct_kw, release=rel.get("CPI 전년비"))
+        with c[1]:
+            kpi("근원 CPI (전년비)", core, **pct_kw, release=rel.get("근원 CPI 전년비"))
+        with c[2]:
+            kpi("근원 PCE (전년비)", pce, **pct_kw, help="연준이 목표로 삼는 물가 지표", release=rel.get("근원 PCE 전년비"))
+        with c[3]:
+            kpi("10년 기대인플레(BEI)", bei, unit="%", delta_unit="bp", delta_scale=100, delta_decimals=0,
+                help="명목 10년물 − 물가연동채(TIPS) 10년물")
+        _releases("물가", "전월비는 계절조정 지수, CPI 전년비는 BLS 공식과 같은 원계열 기준", rel_df)
 
-        table = sup[["발표(KST)", "분야", "지표", "실제", "예상", "이전", "서프라이즈"]]
-        st.dataframe(table.style.apply(_sup_style, axis=None), hide_index=True, width="stretch",
-                     height=min(38 + 35 * len(table), 600),
-                     column_config={"발표(KST)": st.column_config.DatetimeColumn(format="MM/DD (ddd) HH:mm")})
-    st.caption(
-        "출처: Nasdaq 경제 캘린더 (실제·예상·이전 모두 같은 출처) · 상회 빨강 / 하회 파랑은 방향만 뜻하며 "
-        "좋고 나쁨을 판단하지 않음 (예: 실업률·물가 상회는 보통 부정적) · 주간 균형은 지표 단위가 달라 건수로만 계산"
-    )
+        l, r = st.columns(2)
+        with l:
+            show_chart(line_chart(
+                {"CPI": clip(cpi), "근원 CPI": clip(core), "근원 PCE": clip(pce)},
+                "물가 상승률 (전년비)", unit="%", hline=2, hline_label="연준 목표 2%",
+            ))
+        with r:
+            show_chart(line_chart(
+                {"10년 BEI": clip(bei), "5년 후 5년 기대인플레": clip(fwd)},
+                "시장 기대인플레이션", unit="%", hline=2, hline_label="2%",
+            ))
+
+    # ── 고용 ─────────────────────────────────────────────
+    with tabs[2]:
+        rel_df, rel = _rel("고용")
+        nfp, ur = m.fred("PAYEMS", "diff"), m.fred("UNRATE")
+        claims, claims4 = m.fred("ICSA") / 1000, m.fred("IC4WSA") / 1000
+        jolts = m.fred("JTSJOL") / 1000
+        c = st.columns(4)
+        with c[0]:
+            kpi("비농업 고용 증감", nfp, unit="K", decimals=0, freq="M", help="전월 대비 일자리 증감(천 명)",
+                release=rel.get("비농업 고용 증감"))
+        with c[1]:
+            kpi("실업률", ur, unit="%", delta_unit="%p", decimals=1, freq="M", release=rel.get("실업률"))
+        with c[2]:
+            kpi("신규 실업수당 청구", claims, unit="K", decimals=0, help="주간, 천 건", release=rel.get("신규 실업수당 청구"))
+        with c[3]:
+            kpi("JOLTS 구인건수", jolts, unit="M", decimals=2, freq="M", release=rel.get("JOLTS 구인건수"))
+        _releases("고용", "신규·계속 실업수당 청구는 주간(기준 = 해당 주 마지막 날) · 시간당 임금은 민간 전체", rel_df)
+
+        l, r = st.columns(2)
+        with l:
+            show_chart(bar_chart(clip(nfp), "비농업 고용 증감 (천 명)", unit="K"))
+        with r:
+            show_chart(line_chart({"실업률": clip(ur)}, "실업률", unit="%", decimals=1))
+        l, r = st.columns(2)
+        with l:
+            show_chart(line_chart(
+                {"신규 청구": clip(claims), "4주 평균": clip(claims4)},
+                "신규 실업수당 청구 (천 건)", unit="K", decimals=0,
+            ))
+        with r:
+            show_chart(line_chart({"구인건수": clip(jolts)}, "JOLTS 구인건수 (백만 건)", unit="M"))
+
+    # ── 성장·소비 ────────────────────────────────────────
+    with tabs[3]:
+        rel_df, rel = _rel("성장·소비")
+        gdp = m.fred("A191RL1Q225SBEA")
+        retail_mom, retail_yoy = m.fred("RSAFS", "mom"), m.fred("RSAFS", "yoy")
+        ip = m.fred("INDPRO", "yoy")
+        houst = m.fred("HOUST") / 1000
+        c = st.columns(4)
+        with c[0]:
+            kpi("실질 GDP (전기비 연율)", gdp, unit="%", delta_unit="%p", decimals=1, freq="Q",
+                release=rel.get("실질 GDP (전기비 연율)"))
+        with c[1]:
+            kpi("소매판매 (전월비)", retail_mom, unit="%", delta_unit="%p", freq="M", release=rel.get("소매판매 전월비"))
+        with c[2]:
+            kpi("산업생산 (전년비)", ip, unit="%", delta_unit="%p", freq="M", release=rel.get("산업생산 전년비"))
+        with c[3]:
+            kpi("주택착공 (연율)", houst, unit="M", decimals=2, freq="M", help="계절조정 연율, 백만 호",
+                release=rel.get("주택착공 (연율)"))
+        _releases("성장·소비", "GDP는 속보→잠정→확정으로 수정되며 발표는 가장 최근 수정일 · 주택착공·건축허가는 계절조정 연율", rel_df)
+
+        l, r = st.columns(2)
+        with l:
+            show_chart(bar_chart(clip(gdp), "실질 GDP 성장률 (전기비 연율)", unit="%", decimals=1))
+        with r:
+            show_chart(line_chart(
+                {"소매판매": clip(retail_yoy), "산업생산": clip(ip)},
+                "소매판매·산업생산 (전년비)", unit="%", hline=0,
+            ))
+        show_chart(line_chart({"주택착공": clip(houst)}, "주택착공 (연율, 백만 호)", unit="M", height=240))
+
+    # ── 금융 여건 ────────────────────────────────────────
+    with tabs[4]:
+        rel_df, rel = _rel("금융 여건")
+        hy, ig, nfci = m.fred("BAMLH0A0HYM2"), m.fred("BAMLC0A0CM"), m.fred("NFCI")
+        vix, move, dxy = m.yahoo("^VIX"), m.yahoo("^MOVE"), m.yahoo("DX-Y.NYB")
+        spread_kw = dict(unit="%p", delta_unit="bp", delta_scale=100, delta_decimals=0)
+        c = st.columns(6)
+        with c[0]:
+            kpi("하이일드 스프레드", hy, **spread_kw, release=rel.get("하이일드 스프레드"))
+        with c[1]:
+            kpi("투자등급 스프레드", ig, **spread_kw, release=rel.get("투자등급 스프레드"))
+        with c[2]:
+            kpi("VIX", vix)
+        with c[3]:
+            kpi("MOVE", move, help="미 국채 변동성 지수")
+        with c[4]:
+            kpi("달러 인덱스", dxy)
+        with c[5]:
+            kpi("금융여건지수(NFCI)", nfci, decimals=3, help="0보다 크면 평균보다 긴축적", release=rel.get("금융여건지수 NFCI"))
+        _releases("금융 여건", "시장·주간 지표라 컨센서스가 없음 · 기준 = 데이터 날짜, 발표 = FRED 반영일, 이전 = 직전 관측값", rel_df)
+
+        l, r = st.columns(2)
+        with l:
+            show_chart(line_chart({"하이일드": clip(hy), "투자등급": clip(ig)}, "회사채 신용 스프레드", unit="%p"))
+        with r:
+            show_chart(line_chart({"VIX": clip(vix)}, "VIX (주식 변동성)"))
+        l, mid, r = st.columns(3)
+        with l:
+            show_chart(line_chart({"MOVE": clip(move)}, "MOVE (국채 변동성)", height=240))
+        with mid:
+            show_chart(line_chart({"DXY": clip(dxy)}, "달러 인덱스", height=240))
+        with r:
+            show_chart(line_chart({"NFCI": clip(nfci)}, "금융여건지수", hline=0, hline_label="평균",
+                                  decimals=3, height=240))
+        st.caption("신용 스프레드·NFCI는 무료 실시간 소스가 없어 FRED(1일\\~1주 지연) 사용")
+
+    # ── 서프라이즈 ───────────────────────────────────────
+    with tabs[5]:
+        c1, c2 = st.columns([1, 3], vertical_alignment="bottom")
+        weeks = {"4주": 4, "8주": 8, "12주": 12}[c1.segmented_control("기간", ["4주", "8주", "12주"], default="8주",
+                                                                    key="sup_weeks") or "8주"]
+        with st.spinner("발표치 불러오는 중... (처음엔 12주치 약 30초, 이후엔 새 날짜만)"):
+            sup_all = get_surprises(12)
+        cats = ["고용", "물가", "성장·소비", "심리·제조업", "주택"]
+        picked = c2.pills("분야", cats, default=cats, selection_mode="multi", key="sup_cats") or cats
+        if sup_all.empty:
+            st.info("서프라이즈 데이터를 불러오지 못했습니다.")
+        else:
+            since = pd.Timestamp.now() - pd.DateOffset(weeks=weeks)
+            sup = sup_all[(sup_all["발표(KST)"] >= since) & sup_all["분야"].isin(picked)]
+            d = sup["_diff"]
+            beat, miss, inline = (d > 0).sum(), (d < 0).sum(), (d == 0).sum()
+            c = st.columns(4)
+            c[0].metric("발표", f"{len(sup)}건", border=True)
+            c[1].metric("예상 상회", f"{beat}건", f"{beat / max(len(sup), 1) * 100:.0f}%", delta_color="off",
+                        delta_arrow="off", border=True)
+            c[2].metric("예상 하회", f"{miss}건", f"{miss / max(len(sup), 1) * 100:.0f}%", delta_color="off",
+                        delta_arrow="off", border=True)
+            c[3].metric("부합", f"{inline}건", border=True)
+
+            # 주간 서프라이즈 균형: (상회 − 하회) 건수. 지표 단위가 달라 크기 대신 방향만 센다
+            weekly = (sup.assign(w=sup["발표(KST)"].dt.to_period("W-FRI").dt.start_time,
+                                 s=np.sign(sup["_diff"])).groupby("w")["s"].sum())
+            show_chart(bar_chart(weekly, "주간 서프라이즈 균형 (상회 − 하회 건수)", height=220))
+
+            def _sup_style(df: pd.DataFrame) -> pd.DataFrame:
+                styles = pd.DataFrame("", index=df.index, columns=df.columns)
+                for i, v in sup["_diff"].items():
+                    if v:
+                        color = "#e66767" if v > 0 else "#3987e5"
+                        styles.at[i, "서프라이즈"] = f"color: {color}; font-weight: 600"
+                return styles
+
+            table = sup[["발표(KST)", "분야", "지표", "실제", "예상", "이전", "서프라이즈"]]
+            st.dataframe(table.style.apply(_sup_style, axis=None), hide_index=True, width="stretch",
+                         height=min(38 + 35 * len(table), 600),
+                         column_config={"발표(KST)": st.column_config.DatetimeColumn(format="MM/DD (ddd) HH:mm")})
+        st.caption(
+            "출처: Nasdaq 경제 캘린더 (실제·예상·이전 모두 같은 출처) · 상회 빨강 / 하회 파랑은 방향만 뜻하며 "
+            "좋고 나쁨을 판단하지 않음 (예: 실업률·물가 상회는 보통 부정적) · 주간 균형은 지표 단위가 달라 건수로만 계산"
+        )
+
+
+_body()

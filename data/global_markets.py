@@ -320,3 +320,15 @@ def quote_table() -> pd.DataFrame:
                      "시가총액($bn)": shares[t] * last / 1e9 if t in shares else None,
                      "상태": state, "기준 시각": status.loc[t, "기준 시각"]})
     return pd.DataFrame(rows)
+
+
+def breadth_history(closes: pd.DataFrame, windows=(50, 200)) -> pd.DataFrame:
+    """이동평균 위에 있는 종목 비율(%) 이력. 열 = '50일선 위' 등. 이동평균을 계산할 수 있는 종목만 센다."""
+    closes = closes.ffill()
+    out = {}
+    for w in windows:
+        ma = closes.rolling(w, min_periods=w).mean()
+        valid = ma.notna() & closes.notna()
+        above = ((closes > ma) & valid).sum(axis=1).astype(float)
+        out[f"{w}일선 위"] = above / valid.sum(axis=1).replace(0, float("nan")) * 100
+    return pd.DataFrame(out).dropna()

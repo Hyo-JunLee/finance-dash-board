@@ -163,10 +163,18 @@ with tabs[0]:
 # ── 시가총액 상위 히트맵 ─────────────────────────────
 with tabs[1]:
     n = st.segmented_control("종목 수", [30, 50, 100], default=50, key="heat_n") or 50
-    top = (nv_cap if use_live else stocks).nlargest(n, "시가총액").rename(columns={"시장": "섹터"})
+    group = st.segmented_control("묶음", ["업종", "시장"], default="업종", key="heat_group") or "업종"
+    top = (nv_cap if use_live else stocks).nlargest(n, "시가총액")
+    if group == "업종":
+        with st.spinner("업종 분류 불러오는 중... (하루 한 번)"):
+            imap = naver_live.industry_map()
+        top = top.assign(섹터=[naver_live.sector_of(c, imap, "기타") for c in top["코드"]])
+    else:
+        top = top.assign(섹터=top["시장"])
     show_chart(treemap(top.assign(수익률=top["등락률"]), color_range=5, root=f"국내 시가총액 상위 {n}"))
-    st.caption(f"{src} · 크기 = 시가총액, 색 = 등락률 · 종목별 업종 분류가 없어 시장(KOSPI/KOSDAQ)으로 묶음 · "
-               "시장 타일 수익률은 시총 가중 평균")
+    st.caption(f"{src} · 크기 = 시가총액, 색 = 등락률 · 묶음: "
+               + ("네이버 업종 분류 (우선주는 보통주 업종)" if group == "업종" else "KOSPI/KOSDAQ")
+               + " · 묶음 타일 수익률은 시총 가중 평균")
 
 # ── 등락·거래대금 상위 ───────────────────────────────
 with tabs[2]:

@@ -42,7 +42,8 @@ def fetch_day(release_day: date) -> list[dict]:
     cached = json.loads(path.read_text()) if path.exists() else None
     age = time.time() - path.stat().st_mtime if path.exists() else 0
     # Nasdaq이 가끔 평일을 통째로 빈 목록으로 준다(11/19·11/23 사례) → 빈 결과는 확정으로 보지 않고 30분마다 다시 받는다
-    if cached is not None and ((settled and cached) or age < (300 if cached or not settled else 1800)):
+    fresh = 60 if release_day >= us_today else 300  # 오늘 발표분은 1분 (속보용)
+    if cached is not None and ((settled and cached) or age < (fresh if cached or not settled else 1800)):
         return cached
     query_day = release_day + timedelta(days=1)  # API 날짜가 하루 밀려 있음
     try:

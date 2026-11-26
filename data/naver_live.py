@@ -149,3 +149,35 @@ def program_today(market: str) -> dict:
     p = _get(f"{_API}/index/{market}/integration")["programTrendInfo"]
     return {"차익": _num(p["indexDifferenceReal"]), "비차익": _num(p["indexBiDifferenceReal"]),
             "합계": _num(p["indexTotalReal"]), "날짜": pd.Timestamp(p["bizdate"])}
+
+
+# ── 종목 → 네이버 업종 (히트맵 묶음용) ─────────────────────────
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def industry_map() -> dict[str, str]:
+    """{종목코드: 네이버 업종명}. 하루 한 번 받아 디스크에도 저장, 실패하면 저장본을 쓴다 (업종 구성은 거의 안 바뀜)."""
+    import json
+    from concurrent.futures import ThreadPoolExecutor
+    f = _trend_dir().parent / "naver_industry_map.json"
+
+    def members(g):
+        codes, page = [], 1
+        while True:
+            d = _get(f"{_API}/stocks/industry/{g['no']}", page=page, pageSize=100)
+            codes += [x["itemCode"] for x in d.get("stocks", [])]
+            if not d.get("stocks") or len(codes) >= d.get("totalCount", 0):
+                return g["name"], codes
+            page += 1
+    try:
+        groups = _get(f"{_API}/stocks/industry", page=1, pageSize=100)["groups"]
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            out = {code: name for name, codes in ex.map(members, groups) for code in codes}
+        if len(out) > 1000:
+            f.write_text(json.dumps(out, ensure_ascii=False))
+        return out
+    except Exception:
+        return json.loads(f.read_text()) if f.exists() else {}
+
+
+def sector_of(code: str, mapping: dict[str, str], default: str) -> str:
+    """업종 찾기. 우선주(끝자리 5·7·9 등)는 보통주(끝자리 0) 업종을 따른다."""
+    return mapping.get(code) or mapping.get(code[:-1] + "0") or default

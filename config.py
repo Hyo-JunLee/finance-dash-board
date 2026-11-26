@@ -24,6 +24,10 @@ def _setting(name: str, default: str = "") -> str:
 
 FRED_API_KEY = _setting("FRED_API_KEY")
 KRX_API_KEY = _setting("KRX_API_KEY")
+# 휴대폰 알림 (텔레그램 봇, 선택): 이례적 변동 알림 alerts.py
+TELEGRAM_BOT_TOKEN = _setting("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = _setting("TELEGRAM_CHAT_ID")
+DASHBOARD_URL = _setting("DASHBOARD_URL")  # 알림에 붙일 대시보드 주소 (선택)
 # 공개 배포용: 개인 화면(내 포트폴리오)과 맥 전용 화면(데이터 상태)을 숨기고, 텔레그램 원문 전문 대신 앞부분만 보여준다
 PUBLIC_MODE = _setting("PUBLIC_MODE", "0") == "1"
 

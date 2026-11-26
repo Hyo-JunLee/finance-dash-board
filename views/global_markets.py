@@ -80,6 +80,36 @@ else:
     st.plotly_chart(treemap(heat, COLOR_RANGE[period]), width="stretch", config={"displayModeBar": False})
     st.caption(f"{len(heat)}개 종목 · 크기 = 시가총액(발행주식수 × 현재가) · 섹터 타일 수익률은 시총 가중 평균")
 
+# ── 시장 폭: 대형주 중 이동평균 위 종목 비율 ─────────────────────
+breadth = gm.breadth_history(gm.get_closes(tuple(gm.STOCK_SECTOR), "2y"))
+if len(breadth) > 6:
+    st.subheader(f"📏 시장 폭 (히트맵 대형주 {len(gm.STOCK_SECTOR)}개)")
+    b1, b2, b3 = st.columns([1, 1, 3], vertical_alignment="center")
+    for col, name in zip((b1, b2), breadth.columns):
+        now_v, wk = breadth[name].iloc[-1], breadth[name].iloc[-6]
+        d = round(now_v - wk)
+        col.metric(name, f"{now_v:.0f}%", f"{d:+d}%p (1주)" if d else "1주 전과 같음", border=True,
+                   delta_color="red" if d > 0 else "blue" if d < 0 else "gray", delta_arrow="auto" if d else "off",
+                   help=f"대형주 중 종가가 {name.split('일')[0]}일 이동평균보다 높은 종목 비율 · 기준일 {breadth.index[-1]:%m/%d}")
+    with b3:
+        spx = live_closes["^GSPC"].dropna() if "^GSPC" in live_closes else pd.Series(dtype=float)
+        idx_y = spx[spx.index >= breadth.index[-1] - pd.Timedelta(days=365)]
+        msg = ""
+        if len(idx_y) > 20:
+            near_high = idx_y.iloc[-1] >= idx_y.max() * 0.97
+            if near_high and breadth["50일선 위"].iloc[-1] < 50:
+                msg = "⚠️ **좁은 장**: S&P 500은 1년 고점 근처인데 대형주 절반 이상이 50일선 아래 — 소수 종목이 지수를 끌어올리는 중"
+            elif breadth["50일선 위"].iloc[-1] >= 80:
+                msg = "📈 **넓은 상승**: 대형주 대부분이 50일선 위 — 고르게 오르는 장 (과열 여부도 함께 확인)"
+            elif breadth["50일선 위"].iloc[-1] <= 20:
+                msg = "📉 **광범위한 약세**: 대형주 대부분이 50일선 아래 — 반등 시 폭이 넓어지는지 확인"
+        st.markdown(msg or "50일선 위 비율이 50% 안팎이면 상승·하락 종목이 비슷한 중립 구간")
+    year = breadth[breadth.index >= breadth.index[-1] - pd.Timedelta(days=365)]
+    show_chart(line_chart({c: year[c] for c in year.columns}, "이동평균 위 종목 비율 (최근 1년)", unit="%",
+                          hline=50, hline_label="50%", decimals=0, height=240))
+    st.caption("지수는 시가총액 가중이라 대형 몇 종목이 끌어올릴 수 있음 · 이 비율은 종목 수 기준이라 '얼마나 많은 종목이 함께 오르는지'를 봄 · "
+               "지수 상승 중 비율이 떨어지면 상승이 좁아지는 신호")
+
 # ── 주요 종목 시세표 (investing.com 스타일) ──────────────
 SEMIS = ["NVDA", "AVGO", "AMD", "QCOM", "TXN", "AMAT", "MU", "TSM", "SOXL", "SOXS"]
 

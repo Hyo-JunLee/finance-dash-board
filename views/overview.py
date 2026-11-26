@@ -5,12 +5,13 @@ import streamlit as st
 
 import config
 from data.consensus import parse_value
-from data.econ_calendar import ff_fetched_at, get_recent_indicators, get_week_actuals, get_week_calendar
+from data.econ_calendar import (ff_fetched_at, get_recent_indicators, get_week_actuals, get_week_calendar,
+                                 refresh_bucket)
 from data.market import SUMMARY_ITEMS, fmt_asof, get_snapshot
 from data.news import get_news, load_news_summary
 from data.telegram import load_summary, recent_posts
-from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, context_html, mini_chart, render_brief_cards, render_issues, render_news, render_post_list,
-                render_summary, render_views, show_chart)
+from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, context_html, mini_chart, render_brief_cards, render_issues,
+                release_board, render_news, render_post_list, render_summary, render_views, show_chart)
 
 PERIODS = {"1개월": 30, "3개월": 90, "6개월": 180, "1년": 365}
 
@@ -199,45 +200,33 @@ with cal_col:
             f"일정·예상·이전: ForexFactory (수신 {fetched:%m/%d %H:%M}) · 실제: Nasdaq 캘린더 (발표 후 5분 내 반영)"
             if fetched else "출처: ForexFactory"
         )
+    # 국내 주요 일정 (금통위·수출입동향)
+    from data.kr_calendar import bok_meetings, upcoming as kr_upcoming
+    _today = datetime.now().date()
+    _kr = kr_upcoming(_today, bok_meetings(_today.year))
+    if _kr:
+        def _dday(d):
+            n = (d - _today).days
+            return "**오늘**" if n == 0 else f"D-{n}"
+        st.markdown("**🇰🇷 국내 주요 일정** · " + " · ".join(
+            f"{e['날짜']:%m/%d}({'월화수목금토일'[e['날짜'].weekday()]}) {e['일정']} {_dday(e['날짜'])}" for e in _kr[:4]),
+            help="금통위: 한국은행 공식 일정 · 수출입동향: 통상 매월 1일 09:00 (산업통상자원부)")
+
+@st.fragment(run_every="60s")  # 1분마다: 발표 시간대엔 2분 캐시라 ⚡속보가 바로 반영, 그 밖엔 캐시 그대로
+def _recent_board() -> None:
+    with st.spinner("FRED 지표 불러오는 중..."):
+        try:
+            recent = get_recent_indicators(refresh_bucket())
+        except Exception as e:
+            st.warning(f"FRED 지표를 불러오지 못했습니다: {str(e)[:80]}")
+            return
+    recent = recent.sort_values("발표", ascending=False, na_position="last")  # 최근 발표순
+    release_board(recent, dense=True)
+
 
 with recent_col:
     st.subheader("📊 최근 발표된 주요 지표")
-    with st.spinner("FRED 지표 불러오는 중..."):
-        recent = get_recent_indicators()
-    recent = recent.sort_values("발표", ascending=False, na_position="last").reset_index(drop=True)  # 최근 발표순
-    def _surprise_style(df: pd.DataFrame) -> pd.DataFrame:
-        # 예상 대비 상회 빨강 / 하회 파랑 (가격 화면과 같은 방향 색). 좋고 나쁨은 지표마다 달라 판단하지 않음
-        styles = pd.DataFrame("", index=df.index, columns=df.columns)
-        for i, v in recent["_surprise"].items():
-            if recent.at[i, "예상"] == "-" or abs(v) < 1e-9:
-                continue
-            color, bg = ("#e66767", "rgba(230,103,103,0.14)") if v > 0 else ("#3987e5", "rgba(57,135,229,0.14)")
-            styles.at[i, "서프라이즈"] = f"color: {color}; background-color: {bg}; font-weight: 600"
-        return styles
-
-    table = recent.drop(columns=["_delta", "_surprise", "_warn"])
-    st.dataframe(
-        table.style.apply(_surprise_style, axis=None),
-        hide_index=True,
-        width="stretch",
-        height=38 + 35 * len(table),  # 줄 수에 맞춰 스크롤 없이
-        column_config={
-            "지표": st.column_config.TextColumn(width=112),
-            "발표": st.column_config.DatetimeColumn("발표 (KST)", format="MM/DD HH:mm", width=90,
-                                                   help="해당 수치가 발표된 한국 시간"),
-            "최신": st.column_config.TextColumn(width=58),
-            "예상": st.column_config.TextColumn(width=48),
-            "서프라이즈": st.column_config.TextColumn(width=100, help="Nasdaq 실제치 − 컨센서스"),
-            "이전": st.column_config.TextColumn(width=58),
-            "기준": st.column_config.TextColumn(width=50, help="지표의 대상 기간 (26.08 = 2026년 8월, 주간 지표는 주 마지막 날)"),
-            "다음 발표": st.column_config.TextColumn("다음", width=48, help="다음 발표 예정일"),
-        },
-    )
-    warns = recent.loc[recent["_warn"] != "", ["지표", "_warn"]]
-    st.caption(
-        "실제: FRED · 예상(컨센서스): Nasdaq 경제 캘린더 · 서프라이즈는 같은 출처(Nasdaq)의 실제치와 예상치로 판정"
-        + "".join(f"  \n⚠ {name}: {msg}" for name, msg in zip(warns["지표"], warns["_warn"]))
-    )
+    _recent_board()
 
 st.divider()
 

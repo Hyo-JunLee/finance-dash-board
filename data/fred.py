@@ -31,7 +31,7 @@ def fred_today() -> date:
 def _get(path: str, **params) -> dict:
     params.update(api_key=config.FRED_API_KEY, file_type="json")
     last_err = None
-    for attempt in range(3):
+    for attempt in range(4):
         try:
             with _limit:
                 r = requests.get(f"{FRED_API}/{path}", params=params, timeout=20)
@@ -39,7 +39,8 @@ def _get(path: str, **params) -> dict:
             return r.json()
         except (requests.RequestException, ValueError) as e:
             last_err = e
-            time.sleep(1 + attempt)
+            limited = getattr(getattr(e, "response", None), "status_code", None) == 429
+            time.sleep(5 * (attempt + 1) if limited else 1 + attempt)  # 분당 호출 한도(429)면 길게 기다림
     raise last_err
 
 
@@ -89,6 +90,7 @@ def get_fred_series(series_id: str) -> pd.Series:
     return fetch_series(series_id)
 
 
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
 def fetch_next_release_date(series_id: str) -> date | None:
     """해당 시계열이 속한 발표(release)의 다음 예정일."""
     release_id = _get("series/release", series_id=series_id)["releases"][0]["id"]
@@ -105,6 +107,7 @@ def fetch_next_release_date(series_id: str) -> date | None:
     return date.fromisoformat(upcoming[0]) if upcoming else None
 
 
+@st.cache_data(ttl=config.TTL_MACRO, show_spinner=False)
 def fetch_release_dates(series_id: str, obs_date: date) -> list[date]:
     """obs_date 관측값이 발표·수정된 날들, 최신순 (첫 항목 = 현재 값이 정해진 날).
 

@@ -141,8 +141,23 @@ def show_chart(fig) -> None:
 
 def kpi(label: str, s, unit: str = "", decimals: int = 2, delta_unit: str | None = None,
         delta_scale: float = 1, delta_decimals: int | None = None, freq: str = "D",
-        help: str | None = None) -> None:
-    """최신값 + 직전 대비 변화 + 기준 시점. 매크로 지표는 좋고 나쁨이 방향마다 달라 색은 중립."""
+        help: str | None = None, release: dict | None = None) -> None:
+    """최신값 + 직전 대비 변화 + 기준 시점. 매크로 지표는 좋고 나쁨이 방향마다 달라 색은 중립.
+    release(발표 현황 한 줄)를 주면 카드 안에 발표 시각·다음 발표 D-day·예상 대비 배지를 붙이고,
+    예상보다 높으면 빨강 / 낮으면 파랑 테두리."""
+    if release is not None and s is not None and len(s) >= 2:
+        key = "kpi_" + re.sub(r"\W", "_", label)
+        with st.container(border=True, key=key):
+            _kpi_metric(label, s, unit, decimals, delta_unit, delta_scale, delta_decimals, freq, help, border=False)
+            st.html(release_badge_html(release))
+        tone = release_tone(release)
+        if tone:
+            st.html(f"<style>.st-key-{key} {{ border-color:{UP_COLOR if tone == 'up' else DOWN_COLOR} !important; }}</style>")
+        return
+    _kpi_metric(label, s, unit, decimals, delta_unit, delta_scale, delta_decimals, freq, help, border=True)
+
+
+def _kpi_metric(label, s, unit, decimals, delta_unit, delta_scale, delta_decimals, freq, help, border) -> None:
     if s is None or len(s) < 2:
         st.metric(label, "N/A", border=True)
         return
@@ -162,7 +177,7 @@ def kpi(label: str, s, unit: str = "", decimals: int = 2, delta_unit: str | None
         label, f"{last:,.{decimals}f}{unit}",
         f"{d:+,.{dd}f}{du}",
         delta_color="off", delta_arrow="off" if d == 0 else "auto",
-        delta_description=asof, border=True, help=help,
+        delta_description=asof, border=border, help=help,
     )
 
 
@@ -508,3 +523,142 @@ def investor_chart(df, title: str | None = None, height: int = 260):
     fig.update_xaxes(nticks=8)
     fig.update_yaxes(zeroline=True, zerolinecolor=_MUTED, tickformat=",.0f")
     return fig
+
+
+# ── 경제지표 발표 현황 보드 (표 대신 카드형 행) ─────────────────────────
+_WEEK = "월화수목금토일"
+RELEASE_CSS = """<style>
+.rb { container-type:inline-size; font-size:.84rem; }
+.rb-head, .rb-row { display:grid; grid-template-columns: 1.15fr 2.6fr 1fr 1fr; gap:.4rem 1rem; align-items:center; }
+.rb-head { font-size:.72rem; opacity:.55; padding:0 .8rem .35rem; }
+.rb-row { padding:.6rem .8rem; margin-bottom:.4rem; border-radius:.55rem; background:rgba(255,255,255,.035);
+          border:1px solid rgba(255,255,255,.07); border-left:3px solid rgba(255,255,255,.18); }
+.rb-row.up { border-left-color:#e66767; } .rb-row.down { border-left-color:#3987e5; }
+.rb-name { font-weight:700; font-size:.92rem; line-height:1.25; }
+.rb-sub { font-size:.72rem; opacity:.55; margin-top:.1rem; }
+.rb-ms { display:flex; flex-wrap:wrap; gap:.35rem 1.4rem; }
+.rb-m { display:flex; align-items:baseline; flex-wrap:wrap; gap:.15rem .45rem; }
+.rb-lab { font-size:.7rem; opacity:.6; min-width:2.6rem; }
+.rb-val { font-weight:700; font-size:1.05rem; font-variant-numeric:tabular-nums; }
+.rb-ctx { font-size:.72rem; opacity:.6; font-variant-numeric:tabular-nums; }
+.rb-pill { font-size:.7rem; font-weight:700; padding:.05rem .45rem; border-radius:999px; white-space:nowrap;
+           background:rgba(255,255,255,.08); color:rgba(255,255,255,.75); }
+.rb-pill.up { background:rgba(230,103,103,.16); color:#ef8a8a; } .rb-pill.down { background:rgba(57,135,229,.18); color:#7fb1f0; }
+.rb-pill.soon { background:rgba(240,163,90,.18); color:#f0a35a; } .rb-pill.new { background:rgba(25,158,112,.2); color:#4fd1a1; }
+.rb-when { font-variant-numeric:tabular-nums; line-height:1.35; }
+.rb-when .rb-sub { margin-top:0; }
+.rb.dense .rb-head, .rb.dense .rb-row { grid-template-columns: 1.05fr 1.9fr 1.05fr; gap:.3rem .8rem; }
+.rb.dense .rb-row { padding:.45rem .7rem; margin-bottom:.3rem; }
+.rb.dense .rb-name { font-size:.86rem; } .rb.dense .rb-val { font-size:.98rem; }
+.rb.dense .rb-when { font-size:.78rem; }
+@container (max-width: 720px) {
+  .rb:not(.dense) .rb-head { display:none; }
+  .rb:not(.dense) .rb-row { grid-template-columns: 1fr 1fr; }
+  .rb:not(.dense) .rb-row .rb-name-cell, .rb:not(.dense) .rb-row .rb-ms { grid-column: 1 / -1; }
+}
+@container (max-width: 430px) {
+  .rb.dense .rb-head { display:none; }
+  .rb.dense .rb-row { grid-template-columns: 1fr 1fr; }
+  .rb.dense .rb-row .rb-ms { grid-column: 1 / -1; grid-row: 2; }
+}
+</style>"""
+
+
+FLASH_PILL = ('<span class="rb-pill soon" title="FRED 반영 전 Nasdaq 발표치 (FRED에 올라오면 자동으로 바뀜)">'
+              '⚡속보</span>')
+
+
+def _esc(x) -> str:
+    return html.escape(str(x))
+
+
+def _dday(d, today) -> tuple[str, str]:
+    if d is None or pd.isna(d):
+        return "-", ""
+    d = pd.Timestamp(d).date()
+    n = (d - today).days
+    tag = "오늘" if n == 0 else f"D-{n}" if n > 0 else f"D+{-n}"
+    return f"{d:%m/%d}({_WEEK[d.weekday()]})", f'<span class="rb-pill{" soon" if 0 <= n <= 3 else ""}">{tag}</span>'
+
+
+def _released(t, notime: bool, today) -> tuple[str, str]:
+    if t is None or pd.isna(t):
+        return "-", ""
+    t = pd.Timestamp(t)
+    when = f"{t:%m/%d}({_WEEK[t.weekday()]})" + ("" if notime else f" {t:%H:%M}")
+    new = '<span class="rb-pill new">🆕 최근</span>' if 0 <= (today - t.date()).days <= 3 else ""
+    return when, new
+
+
+def _tone(v: float, has_cons: bool) -> str:
+    return "" if not has_cons or abs(v) < 1e-9 else "up" if v > 0 else "down"
+
+
+def release_badge_html(row: dict, today=None) -> str:
+    """카드용 한 줄: 발표 시각 · 다음 발표 D-day · 예상 대비 배지."""
+    today = today or pd.Timestamp.now().date()
+    when, new = _released(row.get("발표"), row.get("_notime", True), today)
+    nxt, dd = _dday(row.get("_next"), today)
+    has = row.get("예상", "-") != "-"
+    tone = _tone(row.get("_surprise", 0.0), has)
+    cons = (f'<span class="rb-ctx">예상 {_esc(row["예상"])}</span> '
+            f'<span class="rb-pill {tone}">{_esc(row["서프라이즈"])}</span>') if has else ""
+    if row.get("_flash"):
+        cons = (f'{FLASH_PILL}<span class="rb-ctx">속보 {_esc(row["최신"])} ({_esc(row["기준"])}분)</span> ' + cons)
+    return (f'<div class="rb" style="margin-top:-.4rem"><div class="rb-ms" style="gap:.25rem .6rem">'
+            f'{cons}</div><div class="rb-sub" style="margin-top:.3rem">📅 {when} 발표 {new} · 다음 {nxt} {dd}</div></div>')
+
+
+def release_tone(row: dict | None) -> str:
+    if not row:
+        return ""
+    return _tone(row.get("_surprise", 0.0), row.get("예상", "-") != "-")
+
+
+def release_board(df, note: str = "", today=None, dense: bool = False) -> None:
+    """발표 현황 보드: 지표 한 줄에 전월비·전년비(같은 지표)를 함께, 값·예상·이전·상회/하회 배지, 발표 시각·다음 발표 D-day.
+    df: data.econ_calendar._table 결과 (지표명 끝이 ' 전월비'/' 전년비'면 한 줄로 묶음)."""
+    today = today or pd.Timestamp.now().date()
+    df = df.reset_index(drop=True)
+    base = df["지표"].str.replace(r" (전월비|전년비)$", "", regex=True)
+    rows = []
+    for name in dict.fromkeys(base):  # 원래 순서 유지
+        g = df[base == name]
+        first = g.iloc[0]
+        measures, tones = [], []
+        for _, r in g.iterrows():
+            lab = r["지표"][len(name):].strip()
+            has = r["예상"] != "-"
+            tone = _tone(r["_surprise"], has)
+            tones.append(tone)
+            cons = (f'<span class="rb-ctx">예상 {_esc(r["예상"])}</span>'
+                    f'<span class="rb-pill {tone}">{_esc(r["서프라이즈"])}</span>') if has else ""
+            measures.append(
+                f'<div class="rb-m">{f"<span class=rb-lab>{_esc(lab)}</span>" if lab else ""}<span class="rb-val">{_esc(r["최신"])}</span>'
+                f'{FLASH_PILL if r.get("_flash") else ""}'
+                f'{cons}<span class="rb-ctx">이전 {_esc(r["이전"])}</span></div>')
+        row_tone = next((t for t in tones if t), "")
+        # 발표 시각: 묶음 중 가장 최근
+        latest = g.loc[pd.to_datetime(g["발표"]).fillna(pd.Timestamp(0)).idxmax()]
+        when, new = _released(latest["발표"], bool(latest.get("_notime", True)), today)
+        nxt, dd = _dday(first.get("_next"), today)
+        period = " · ".join(dict.fromkeys(g["기준"]))
+        name_cell = (f'<div class="rb-name-cell"><div class="rb-name">{_esc(name)}</div>'
+                     f'<div class="rb-sub">{_esc(period)} 기준</div></div>')
+        if dense:  # 좁은 칸: 발표·다음 발표를 한 칸에 위아래로
+            when_cells = (f'<div class="rb-when">{when} {new}<div class="rb-sub">다음 {nxt} {dd}</div></div>')
+        else:
+            when_cells = (f'<div class="rb-when">{when} {new}<div class="rb-sub">발표 (KST)</div></div>'
+                          f'<div class="rb-when">{nxt} {dd}<div class="rb-sub">다음 발표</div></div>')
+        rows.append(f'<div class="rb-row {row_tone}">{name_cell}<div class="rb-ms">{"".join(measures)}</div>{when_cells}</div>')
+    head = ('<div class="rb-head"><div>지표</div><div>결과 · 예상 대비</div>'
+            + ('<div>발표 (KST) · 다음</div>' if dense else '<div>발표</div><div>다음</div>') + '</div>')
+    st.html(RELEASE_CSS + f'<div class="rb{" dense" if dense else ""}">{head}{"".join(rows)}</div>')
+    warns = df.loc[df["_warn"] != "", ["지표", "_warn"]]
+    st.caption(
+        "최신: FRED · 예상(컨센서스): Nasdaq 경제 캘린더 · 상회/하회는 같은 출처(Nasdaq)의 실제치와 예상치로 판정 "
+        "(빨강 = 예상보다 높음, 파랑 = 낮음, 좋고 나쁨 판단 아님) · 🆕 = 최근 3일 안 발표 · 주황 D-day = 3일 안 발표 예정 · "
+        "⚡속보 = FRED 반영 전 Nasdaq 발표치(보통 발표 후 5분 안, FRED에 올라오면 자동 교체)"
+        + (f" · {note}" if note else "")
+        + "".join(f"  \n⚠ {n}: {m}" for n, m in zip(warns["지표"], warns["_warn"]))
+    )
