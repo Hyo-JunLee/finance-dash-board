@@ -80,11 +80,20 @@ PERIODS = {"1일": "1D", "1주": pd.DateOffset(weeks=1), "1개월": pd.DateOffse
 SHARES_CACHE = config.CACHE_DIR / "shares_outstanding.json"
 
 
-@st.cache_data(ttl=config.TTL_PRICE, show_spinner=False)
 def get_closes(tickers: tuple[str, ...], period: str = "2y") -> pd.DataFrame:
-    """종가(수정주가) 일괄 조회. 열=티커."""
+    """종가(수정주가) 일괄 조회. 열=티커. 실패하면 빈 표 (빈 결과는 캐시하지 않아 다음 조회 때 다시 받는다)."""
+    try:
+        return _closes(tickers, period)
+    except Exception:
+        return pd.DataFrame(columns=list(tickers))
+
+
+@st.cache_data(ttl=config.TTL_PRICE, show_spinner=False)
+def _closes(tickers: tuple[str, ...], period: str) -> pd.DataFrame:
     df = yf.download(list(tickers), period=period, auto_adjust=True, progress=False, threads=True)["Close"]
     df = df if isinstance(df, pd.DataFrame) else df.to_frame(tickers[0])
+    if df.dropna(how="all").empty:  # Yahoo가 순간적으로 빈 결과를 주면 예외 → 빈 표가 캐시에 남지 않게
+        raise RuntimeError(f"Yahoo 종가 빈 응답: {', '.join(tickers[:3])}…")
     if len(df) and df.iloc[-1].isna().any():
         from data.market import get_intraday_last  # 1분봉 일괄 조회 재사용
         try:

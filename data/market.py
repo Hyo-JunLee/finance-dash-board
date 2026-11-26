@@ -21,8 +21,11 @@ from data.rates import get_yield_series
 SUMMARY_ITEMS = {
     "kospi":  ("KOSPI",        "naver", "KOSPI",   "index"),
     "kosdaq": ("KOSDAQ",       "naver", "KOSDAQ",  "index"),
+    "kospi200": ("코스피 200",  "naver", "KPI200",  "index"),
     "spx":    ("S&P 500",      "yahoo", "^GSPC",   "index"),
     "ndx":    ("NASDAQ",       "yahoo", "^IXIC",   "index"),
+    "es":     ("S&P 500 선물",  "yahoo", "ES=F",    "index"),   # 거의 24시간 거래 → 한국 낮에도 미국 분위기
+    "nq":     ("나스닥100 선물", "yahoo", "NQ=F",    "index"),
     "us2y":   ("미국 2년물",    "ust",   "2Y",      "rate"),
     "us10y":  ("미국 10년물",   "ust",   "10Y",     "rate"),
     "us2s10s": ("10Y−2Y",      "spread", "10Y-2Y", "spread"),
@@ -95,14 +98,14 @@ LIVE_MAX_AGE = pd.Timedelta(minutes=30)  # 이보다 오래된 1분봉은 장 �
 # 정규장이 있는 지수·국채: 장 마감 후 카드에 표시할 공식 마감 시각 (현지 시각, 서머타임은 시간대 변환으로 반영)
 # 국채는 재무부 수익률 곡선 기준 시각(뉴욕 연은이 15:30경 호가로 산출)
 CLOSE_TIMES = {
-    "kospi": ("15:30", "Asia/Seoul"), "kosdaq": ("15:30", "Asia/Seoul"),
+    "kospi": ("15:30", "Asia/Seoul"), "kosdaq": ("15:30", "Asia/Seoul"), "kospi200": ("15:30", "Asia/Seoul"),
     "spx": ("16:00", "America/New_York"), "ndx": ("16:00", "America/New_York"),
     "us2y": ("15:30", "America/New_York"), "us10y": ("15:30", "America/New_York"),
     "us2s10s": ("15:30", "America/New_York"), "kr3y": ("15:30", "Asia/Seoul"),
     "vix": ("16:15", "America/New_York"),
 }
 # 24시간·선물(환율·비트코인·WTI·금)은 정해진 마감이 없어 '마지막 체결 시각'을 쓴다
-SESSIONLESS = {"KRW=X", "BTC-USD", "CL=F", "GC=F", "DX-Y.NYB"}
+SESSIONLESS = {"KRW=X", "BTC-USD", "CL=F", "GC=F", "DX-Y.NYB", "ES=F", "NQ=F"}
 
 
 @st.cache_data(ttl=60, show_spinner=False)

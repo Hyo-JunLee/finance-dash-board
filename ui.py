@@ -467,3 +467,44 @@ def context_html(snap: dict) -> str:
         f'<div class="cx-track"><div class="cx-dot" style="left:calc({pos:.1f}% - 4px)"></div></div>'
         f'<div class="cx-per">{per}</div>{badge}</div>'
     )
+
+
+def index_card(card_key: str, title: str, snap: dict, days: int) -> None:
+    """지수 카드 (국내·미국 증시 공용): 현재값·전일 대비, 1년 범위 막대, 1주·1개월·YTD·1년 변화, 미니 차트.
+    snap: last·chg·pct·series + card_context 결과(range·z·periods). 오늘 변화가 이례적이면 테두리를 주황색으로."""
+    s = snap["series"]
+    base = s[s.index <= s.index[-1] - pd.Timedelta(days=365)]
+    periods = dict(snap["periods"])
+    if len(base):
+        periods["1년"] = (float(s.iloc[-1]) / float(base.iloc[-1]) - 1) * 100
+    chg = snap["chg"]
+    with st.container(border=True, key=card_key):
+        st.metric(title, f"{snap['last']:,.2f}", f"{chg:+,.2f} ({snap['pct']:+.2f}%)",
+                  delta_color="red" if chg > 0 else "blue" if chg < 0 else "gray",
+                  help="1년 범위 막대: 최근 1년 최저\\~최고 중 현재 위치 · 기간 변화는 % · 미니 차트 색은 선택한 기간 동안의 방향")
+        st.html(context_html({**snap, "periods": periods}))
+        spark = s[s.index >= pd.Timestamp.now() - pd.Timedelta(days=days)]
+        if len(spark) > 1:
+            show_chart(mini_chart(spark, spark.iloc[-1] >= spark.iloc[0], days))
+    if snap["z"] == snap["z"] and abs(snap["z"]) >= Z_ALERT:
+        st.html(f"<style>.st-key-{card_key} {{ border-color:#f0a35a !important; }}</style>")
+
+
+INVESTOR_COLORS = {"외국인": "#d95926", "기관": "#199e70", "개인": "rgba(160,160,160,0.75)"}
+
+
+def investor_chart(df, title: str | None = None, height: int = 260):
+    """투자자별 일별 순매수(억원) 묶음 막대. df: 행=날짜, 열=외국인·기관·개인."""
+    import plotly.graph_objects as go
+
+    fig = go.Figure()
+    x = [f"{d:%m/%d}" for d in df.index]  # 휴장일 빈칸 없이
+    for name in ("외국인", "기관", "개인"):
+        if name in df:
+            fig.add_bar(x=x, y=df[name], name=name, marker=dict(color=INVESTOR_COLORS[name], line=dict(width=0)),
+                        hovertemplate=f"{name} %{{y:+,.0f}}억<extra></extra>")
+    fig.update_layout(barmode="group", bargap=0.25, bargroupgap=0.05)
+    fig = _base_layout(fig, title, "", height, legend=True)
+    fig.update_xaxes(nticks=8)
+    fig.update_yaxes(zeroline=True, zerolinecolor=_MUTED, tickformat=",.0f")
+    return fig

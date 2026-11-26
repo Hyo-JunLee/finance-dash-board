@@ -4,9 +4,9 @@ import pandas as pd
 import streamlit as st
 
 from data import global_markets as gm
-from data.market import card_context, fmt_asof
-from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, context_html, line_chart, mini_chart, returns_bar,
-                show_chart, treemap)
+from data.earnings import KST_HINT, upcoming
+from data.market import SUMMARY_ITEMS, card_context, fmt_asof, get_snapshot
+from ui import CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, index_card, line_chart, returns_bar, show_chart, treemap
 
 RET_COLS = list(gm.PERIODS)
 COLOR_RANGE = {"1일": 3, "1주": 6, "1개월": 10, "YTD": 30, "1년": 40}  # 히트맵 색 포화 기준(±%)
@@ -39,35 +39,32 @@ i1, i2 = st.columns([3, 2], vertical_alignment="bottom")
 i1.subheader("📈 주요 지수")
 idx_period = i2.segmented_control("차트 기간", list(INDEX_CHART_DAYS), default="3개월", key="idx_card_period") or "3개월"
 st.html(CONTEXT_CSS)
-idx_alert_css = []
 for col, t in zip(st.columns(len(gm.INDICES)), gm.INDICES):
     s = live_closes[t].dropna() if t in live_closes else pd.Series(dtype=float)
-    with col, st.container(border=True, key=f"idx_{t.strip('^')}"):
-        name = gm.INDICES[t][0]
+    name = gm.INDICES[t][0]
+    with col:
         if len(s) < 2 or t not in status.index:
-            st.metric(name, "N/A", help="데이터 수집 실패")
+            st.metric(name, "N/A", help="데이터 수집 실패", border=True)
             continue
         last, prev = float(s.iloc[-1]), float(s.iloc[-2])
-        state, asof = status.loc[t, "상태"], status.loc[t, "기준 시각"]
-        live = state.startswith("🟢")
-        snap = {"kind": "index", "asof": asof, "asof_kind": "live" if live else "close", "key": t,
+        live = status.loc[t, "상태"].startswith("🟢")
+        snap = {"kind": "index", "last": last, "chg": last - prev, "pct": (last / prev - 1) * 100, "series": s,
+                "asof": status.loc[t, "기준 시각"], "asof_kind": "live" if live else "close", "key": t,
                 **card_context(s, "index", last - prev)}
-        y1 = gm.period_return(s, gm.PERIODS["1년"])
-        if y1 is not None:
-            snap["periods"]["1년"] = y1
-        st.metric(f"{'🟢 ' if live else ''}{name} · {fmt_asof(snap)}", f"{last:,.2f}",
-                  f"{last - prev:+,.2f} ({(last / prev - 1) * 100:+.2f}%)",
-                  delta_color="red" if last > prev else "blue" if last < prev else "gray",
-                  help="1년 범위 막대: 최근 1년 최저\\~최고 중 현재 위치 · 기간 변화는 % · 미니 차트 색은 선택한 기간 동안의 방향")
-        st.html(context_html(snap))
-        spark = s[s.index >= pd.Timestamp(datetime.now()) - pd.Timedelta(days=INDEX_CHART_DAYS[idx_period])]
-        if len(spark) > 1:
-            show_chart(mini_chart(spark, spark.iloc[-1] >= spark.iloc[0], INDEX_CHART_DAYS[idx_period]))
-        if snap["z"] == snap["z"] and abs(snap["z"]) >= Z_ALERT:
-            idx_alert_css.append(f".st-key-idx_{t.strip('^')} {{ border-color:#f0a35a !important; }}")
-if idx_alert_css:
-    st.html(f"<style>{' '.join(idx_alert_css)}</style>")
+        index_card(f"idx_{t.strip('^')}", f"{'🟢 ' if live else ''}{name} · {fmt_asof(snap)}", snap,
+                   INDEX_CHART_DAYS[idx_period])
+st.markdown("**미국 지수 선물** · 거의 24시간 거래 (한국 낮 시간에 보는 오늘 밤 미국장 분위기)")
+for col, key in zip(st.columns(len(gm.INDICES)), ("es", "nq")):
+    snap = get_snapshot(key)
+    with col:
+        if snap is None:
+            st.metric(SUMMARY_ITEMS[key][0], "N/A", help="데이터 수집 실패", border=True)
+            continue
+        live = snap["asof_kind"] == "live"
+        index_card(f"fut_{key}", f"{'🟢 ' if live else ''}{snap['label']} · {fmt_asof(snap)}", snap,
+                   INDEX_CHART_DAYS[idx_period])
 st.caption("기준 시각은 한국 시간 · 🟢 장중은 최신 체결 시각(Yahoo, 최대 15분 지연), '종가'는 뉴욕 정규장 마감 · "
+           "선물 '마지막 체결'은 거래가 멈춘 시각(주말·휴장·일일 정산 시간) · "
            f"막대 = 1년 최저\\~최고 중 현재 위치 · ⚡ = 평소 하루 변동의 {Z_ALERT:.0f}배 이상")
 
 # ── S&P 500 히트맵 ───────────────────────────────────
@@ -128,6 +125,50 @@ _quote_section()
 
 st.divider()
 
+# ── 실적 발표 일정 (대형주) ─────────────────────────────
+st.subheader("📅 대형주 실적 발표")
+us_today = pd.Timestamp.now(tz="America/New_York").date()
+with st.spinner("실적 일정 불러오는 중..."):
+    try:
+        earn = upcoming(us_today)
+    except Exception:
+        earn = pd.DataFrame()
+if earn.empty:
+    st.caption("최근·이번 주 대형주 실적 일정을 불러오지 못했습니다 (Nasdaq 응답 없음).")
+else:
+    def _surprise_color(v) -> str:
+        if pd.isna(v) or v == 0:
+            return ""
+        return f"color: {UP_COLOR if v > 0 else DOWN_COLOR}"
+
+    earn = earn.assign(날짜=earn["날짜"].map(lambda d: f"{d:%m/%d} ({'월화수목금토일'[d.weekday()]})"),
+                       **{c: pd.to_numeric(earn[c], errors="coerce") for c in ("예상 EPS", "실제 EPS", "서프라이즈(%)", "시총($bn)")})
+    done = earn[earn["실제 EPS"].notna()]
+    todo = earn[earn["실제 EPS"].isna()].assign(**{"한국 시간": lambda d: d["시점"].map(KST_HINT).fillna("-")})
+    fmt = {"시총($bn)": "{:,.0f}", "예상 EPS": "{:.2f}", "실제 EPS": "{:.2f}",
+           "서프라이즈(%)": "{:+.1f}%"}
+    l, r = st.columns([3, 2], gap="large")
+    with l:
+        st.markdown(f"**예정** (미국 날짜 · {us_today:%m/%d} 이후)")
+        if todo.empty:
+            st.caption("예정된 대형주 실적이 없습니다.")
+        else:
+            cols = ["날짜", "시점", "한국 시간", "종목", "티커", "예상 EPS", "시총($bn)"]
+            st.dataframe(todo[cols].style.format(fmt, na_rep="-"), hide_index=True, width="stretch",
+                         height=38 + 35 * len(todo))
+    with r:
+        st.markdown("**최근 발표**")
+        if done.empty:
+            st.caption("최근 며칠 안에 발표한 대형주가 없습니다.")
+        else:
+            cols = ["날짜", "종목", "예상 EPS", "실제 EPS", "서프라이즈(%)"]
+            st.dataframe(done[cols].style.map(_surprise_color, subset=["서프라이즈(%)"]).format(fmt, na_rep="-"),
+                         hide_index=True, width="stretch", height=38 + 35 * len(done))
+    st.caption("Nasdaq 실적 캘린더 · 히트맵 대형주 + TSMC + 시가총액 1,000억 달러 이상 · 장 전 = 미국 개장 전 발표, "
+               "장 후 = 마감 후 발표 (한국 시간은 대략) · 서프라이즈 = 실제 EPS가 예상보다 몇 % 높았는지")
+
+st.divider()
+
 # ── 섹터·스타일·지수 비교 ────────────────────────────
 s1, s2 = st.columns([3, 2], vertical_alignment="bottom")
 s1.subheader("🧭 섹터·스타일")
@@ -135,10 +176,12 @@ chart_period = s2.segmented_control("차트 기간", list(CHART_PERIODS), defaul
 
 left, right = st.columns(2, gap="large")
 with left:
-    sec_closes = gm.get_closes(tuple(gm.SECTOR_ETFS))
-    sec_ret = gm.returns_table(sec_closes)[period]
-    sec_ret.index = [f"{gm.SECTOR_ETFS[t]} ({t})" for t in sec_ret.index]
-    show_chart(returns_bar(sec_ret, f"섹터 ETF 수익률 ({period}, 히트맵 기간을 따름)", height=400))
+    try:
+        sec_ret = gm.returns_table(gm.get_closes(tuple(gm.SECTOR_ETFS)))[period]
+        sec_ret.index = [f"{gm.SECTOR_ETFS[t]} ({t})" for t in sec_ret.index]
+        show_chart(returns_bar(sec_ret, f"섹터 ETF 수익률 ({period}, 히트맵 기간을 따름)", height=400))
+    except Exception as e:
+        st.warning(f"섹터 ETF 시세를 불러오지 못했습니다: {str(e)[:80]}")
 
 with right:
     style_tickers = tuple(sorted({t for pair in gm.STYLE_PAIRS.values() for t in pair}))

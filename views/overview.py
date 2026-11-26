@@ -97,6 +97,7 @@ cutoff = pd.Timestamp(datetime.now() - timedelta(days=PERIODS[period]))
 # ── 요약 카드 (자산군별) ─────────────────────────────
 CARD_ROWS = [
     ("주식", ["kospi", "kosdaq", "spx", "ndx"]),
+    ("미국 지수 선물 (거의 24시간 거래 · 한국 낮에 보는 오늘 밤 미국장 분위기)", ["es", "nq"]),
     ("금리", ["us2y", "us10y", "us2s10s", "kr3y"]),
     ("환율·리스크", ["usdkrw", "dxy", "vix"]),
     ("원자재·크립토", ["wti", "gold", "btc"]),
