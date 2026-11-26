@@ -6,7 +6,8 @@ import streamlit as st
 from data import global_markets as gm
 from data.earnings import KST_HINT, upcoming
 from data.market import SUMMARY_ITEMS, card_context, fmt_asof, get_snapshot
-from ui import CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, index_card, line_chart, returns_bar, show_chart, treemap
+from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, index_card, line_chart, render_us_brief, returns_bar,
+                show_chart, treemap)
 
 RET_COLS = list(gm.PERIODS)
 COLOR_RANGE = {"1일": 3, "1주": 6, "1개월": 10, "YTD": 30, "1년": 40}  # 히트맵 색 포화 기준(±%)
@@ -15,6 +16,7 @@ CHART_PERIODS = {"3개월": pd.DateOffset(months=3), "6개월": pd.DateOffset(mo
 
 st.title("미국 증시")
 st.caption(f"조회 시각 {datetime.now():%Y-%m-%d %H:%M} · Yahoo Finance (수정주가, 5분 캐시) · 상승 빨강 / 하락 파랑")
+render_us_brief()  # 맨 위 원문 박스 (국내 증시의 마감 시황 박스와 같은 자리)
 
 
 def _ret_color(v) -> str:

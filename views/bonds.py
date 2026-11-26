@@ -13,13 +13,14 @@ from data.fred import get_fred_series
 from data.global_markets import get_closes
 from data.krx import REAL_10Y, kts_yields
 from data.macro import yahoo
-from ui import curve_chart, kpi
+from data.market import card_context, fmt_asof, get_snapshot
 from data.rates import NOMINAL, get_treasury_curve
-from ui import SERIES_COLORS, _base_layout, line_chart, returns_bar, show_chart
+from ui import CONTEXT_CSS, SERIES_COLORS, render_bond_briefs, _base_layout, curve_chart, kpi, line_chart, rate_card, returns_bar, show_chart
 
 st.title("채권")
 st.caption(f"조회 시각 {datetime.now():%Y-%m-%d %H:%M} · 미국: 재무부·뉴욕 연은·FRED·FiscalData · 한국: KRX "
            "· 금리 변화 단위 bp(0.01%p)")
+render_bond_briefs()  # 맨 위 원문 박스: 미 국채(아침) | 국고채(마감)
 
 CHANGE_WINDOWS = {"1주": pd.DateOffset(weeks=1), "1개월": pd.DateOffset(months=1), "3개월": pd.DateOffset(months=3),
                   "YTD": "YTD", "1년": pd.DateOffset(years=1)}
@@ -72,7 +73,7 @@ def _ai_bond_card(window: str, attr, liq_text: str | None, liq_warn: bool) -> No
             st.markdown(f"**확신도** :{CONF_COLOR.get(v['confidence'], 'gray')}-badge[{v['confidence']}]  \n"
                         f"{_md(v['confidence_reason'])}")
             if v["change_mind"]:
-                st.markdown("**이게 나오면 판단을 바꿉니다**  \n" + "  \n".join(f"· {_md(x)}" for x in v["change_mind"]))
+                st.markdown("**판단을 바꿀 신호**  \n" + "  \n".join(f"· {_md(x)}" for x in v["change_mind"]))
         note = "AI(Claude)가 아래 규칙 기반 근거와 최근 뉴스·리서치를 함께 읽고 쓴 판단입니다. 투자 권유가 아닙니다."
         if v["sources"]:
             note = "참고: " + " · ".join(f"[{x['kind']} · {x['title']}]({x['link']})" if x.get("link") else f"{x['kind']} · {x['title']}"
@@ -113,7 +114,8 @@ def _ai_history(rb: pd.DataFrame) -> None:
     st.dataframe(df, hide_index=True, width="stretch")
 
 
-FLOW_JUDGE_WINDOWS = ("1주", "1개월")  # 이보다 긴 기간은 한 번만 튀어도 '스트레스'로 기울어 결합 판정 생략
+FLOW_JUDGE_WINDOWS = ("1주", "1개월")
+SRF_WARN_BN = 1.0  # 상설 레포기구 이용액이 최근 20일 중 이 이상(십억 달러)이면 경고  # 이보다 긴 기간은 한 번만 튀어도 '스트레스'로 기울어 결합 판정 생략
 
 
 def _z_text(z: pd.Series | None) -> str:
@@ -159,7 +161,7 @@ def _flow_section(window, attr, noise_bp, since_c, common_end, premium_like, d2,
         st.caption("지표별 z (날짜): " + " · ".join(hit_dates) + f" · 1년 롤링 z ({z_win}영업일, 주간 데이터는 {max(round(z_win * 52 / 252), 8)}주)")
 
     # ── 지표 카드 ──
-    row1, row2 = st.columns(4), st.columns(4)
+    row1, row2 = st.columns(4), st.columns([1, 3])
     try:
         lev = fd.lev_10y_equiv().dropna()
         rep_day = lev.index[-1]
@@ -180,49 +182,53 @@ def _flow_section(window, attr, noise_bp, since_c, common_end, premium_like, d2,
                    "월말·분기말·국채 결제일에 일시적으로 튀는 경향이 있습니다.")
     except Exception:
         _flow_card(row1[1], "SOFR − IORB", "데이터 없음", None, "z -", "FRED 조회 실패", "FRED SOFR·IORB 호출 실패")
+    # 상설 레포기구(SRF): 평소 0에 가까워 카드 대신, 최근 20일 최대가 SRF_WARN_BN 이상일 때만 경고
+    srf_note = ""
     try:
         srf = fd.fred_daily("RPONTSYD")
-        _flow_card(row1[2], "상설 레포기구(SRF) 이용액", f"${srf.iloc[-1]:,.1f}bn",
-                   f"최근 20일 최대 ${srf.tail(20).max():,.1f}bn", "판정 미사용", f"{srf.index[-1]:%m/%d} 기준",
-                   "연준 익일물 레포로 국채를 담보로 자금을 빌린 금액(FRED RPONTSYD). 평소에는 0에 가까운 시험성 운영이고, "
-                   "크게 늘면 시장에서 레포 자금을 구하기 어렵다는 신호입니다.")
+        peak = srf.tail(20).max()
+        if peak >= SRF_WARN_BN:
+            srf_note = (f":orange[⚠ 연준 상설 레포기구(SRF) 이용액 최근 20일 최대 ${peak:,.1f}bn "
+                        f"({srf.idxmax():%m/%d}) — 시장에서 레포 자금을 구하기 어려웠다는 신호]")
     except Exception:
-        _flow_card(row1[2], "상설 레포기구(SRF) 이용액", "데이터 없음", None, "판정 미사용", "FRED 조회 실패", "FRED RPONTSYD 호출 실패")
-    _flow_card(row1[3], "스왑스프레드 (10년·30년)", "무료 데이터 없음", None, "판정 미사용", "-",
-               "SOFR 스왑금리 무료 소스를 찾지 못했습니다(FRED DSWP10·30은 LIBOR 기준으로 2016년 중단). 대체값은 만들지 않았습니다.")
+        pass
 
     try:
         a = fd.auction_table().iloc[-1]
-        _flow_card(row2[0], f"최근 입찰 · {a['만기']}", f"응찰률 {a['응찰률']:.2f}",
-                   f"6회 평균 {a['응찰률 6회평균']:.2f} · 딜러 {a['딜러(%)']:.0f}% (평균 {a['딜러(%) 6회평균']:.0f}%) · "
-                   f"해외 {a['해외(%)']:.0f}% (평균 {a['해외(%) 6회평균']:.0f}%)",
-                   _z_text(zs[fd.AUCTION]).replace("z", "약세 z"), f"{a['입찰일']:%m/%d} 입찰 · 테일은 WI 금리 없음으로 생략",
+        _flow_card(row1[2], f"최근 입찰 · {a['만기']}", f"응찰률 {a['응찰률']:.2f}",
+                   f"평균 {a['응찰률 6회평균']:.2f} · 딜러 {a['딜러(%)']:.0f}%(평균 {a['딜러(%) 6회평균']:.0f}%)",
+                   _z_text(zs[fd.AUCTION]).replace("z", "약세 z"),
+                   f"{a['입찰일']:%m/%d} 입찰 · 해외 {a['해외(%)']:.0f}%(평균 {a['해외(%) 6회평균']:.0f}%)",
                    "2·5·7·10·20·30년물 입찰마다 응찰률 하락과 프라이머리 딜러 인수 비율 상승을 같은 만기 직전 6회 평균과 비교해 "
                    "약세 z로 만든 값(양수일수록 약함). 해외는 간접 응찰 비율. 소스: TreasuryDirect (FiscalData는 2026-10 말 갱신 중단). "
                    "입찰 테일(낙찰금리 − WI 금리)은 WI 금리가 유료라 생략했습니다(입찰 탭의 근사 테일은 참고용).")
     except Exception:
-        _flow_card(row2[0], "최근 입찰", "데이터 없음", None, "z -", "TreasuryDirect 조회 실패", "입찰 데이터 호출 실패")
+        _flow_card(row1[2], "최근 입찰", "데이터 없음", None, "z -", "TreasuryDirect 조회 실패", "입찰 데이터 호출 실패")
     if vol_s is not None and len(vol_s):
         unit = "" if not vol_sub else "bp"
-        _flow_card(row2[1], vol_name, f"{vol_s.iloc[-1]:.1f}{unit}", f"1개월 전 대비 {vol_s.iloc[-1] - vol_s.iloc[-22]:+.1f}",
+        _flow_card(row1[3], vol_name, f"{vol_s.iloc[-1]:.1f}{unit}", f"1개월 전 대비 {vol_s.iloc[-1] - vol_s.iloc[-22]:+.1f}",
                    _z_text(zs[fd.VOL]), f"{vol_s.index[-1]:%m/%d} 기준" + (" · 대체 지표" if vol_sub else ""),
                    "MOVE: 미 국채 옵션 내재변동성 지수(Yahoo ^MOVE). 받지 못하면 FRED DGS10 일간 변화의 20영업일 표준편차(bp)로 대체하고 "
                    "카드 이름에 표시합니다.", lagged=vol_sub)
     else:
-        _flow_card(row2[1], "금리 변동성", "데이터 없음", None, "z -", "조회 실패", "MOVE·DGS10 모두 실패")
+        _flow_card(row1[3], "금리 변동성", "데이터 없음", None, "z -", "조회 실패", "MOVE·DGS10 모두 실패")
     try:
         corr = fd.stock_bond_corr(corr_win)
         c = corr.iloc[-1]
-        _flow_card(row2[2], f"주식·채권 수익률 {corr_win}일 상관", f"{c:+.2f}",
+        _flow_card(row2[0], f"주식·채권 수익률 {corr_win}일 상관", f"{c:+.2f}",
                    ("채권 헤지 작동" if c < 0 else "주식·채권 동반 움직임") + (" (약함)" if abs(c) < 0.2 else ""), "판정 미사용", f"{corr.index[-1]:%m/%d} 기준",
                    "S&P 500 일간 수익률과 10년물 국채 일간 수익률(= −금리 변화, FRED SP500·DGS10)의 롤링 상관 (업계 관례). "
                    "음수 = 주가가 빠지는 날 채권값이 오름 → 채권이 주식 헤지로 작동. "
                    "양수 = 주가가 빠지는 날 채권값도 빠짐 → 주식·채권 동반 움직임 (2022년처럼 인플레·재정 우려 국면에 흔함).")
     except Exception:
-        _flow_card(row2[2], "주식·채권 상관", "데이터 없음", None, "판정 미사용", "FRED 조회 실패", "FRED SP500·DGS10 호출 실패")
-    with row2[3]:
-        st.caption("판정에 쓰는 스트레스 지표: 레버리지 펀드 주간 변화, SOFR−IORB, 금리 변동성, 입찰 약세. "
-                   "SRF·주식·채권 상관은 참고용입니다. :orange[주황색 기준일]은 주간 발표이거나 대체 지표라는 뜻입니다.")
+        _flow_card(row2[0], "주식·채권 상관", "데이터 없음", None, "판정 미사용", "FRED 조회 실패", "FRED SP500·DGS10 호출 실패")
+    with row2[1]:
+        if srf_note:
+            st.markdown(srf_note)
+        st.caption("판정에 쓰는 스트레스 지표(윗줄): 레버리지 펀드 주간 변화, SOFR−IORB, 입찰 약세, 금리 변동성. "
+                   "주식·채권 상관은 참고용입니다. :orange[주황색 기준일]은 주간 발표이거나 대체 지표라는 뜻입니다. "
+                   f"연준 상설 레포기구(SRF) 이용액은 평소 0에 가까워 ${SRF_WARN_BN:.0f}bn 이상일 때만 경고합니다. "
+                   "스왑스프레드는 무료 SOFR 스왑금리 소스가 없어 다루지 않습니다.")
         if errors:
             st.caption("불러오지 못한 지표: " + " · ".join(f"{k} ({v})" for k, v in errors.items()))
 
@@ -249,6 +255,75 @@ def _flow_section(window, attr, noise_bp, since_c, common_end, premium_like, d2,
             st.caption("주식·채권 상관 차트: 데이터 없음")
 
 
+# ── 맨 위 요약: 금리 수준 (오늘의 시황 카드 형식) ────────────────
+_WEEK = "월화수목금토일"
+
+
+def _rb_snap(rb: pd.DataFrame, col: str, label: str) -> dict:
+    """재무부 종가 기반 10년 실질금리·BEI 카드용 값."""
+    s = rb[col].dropna()
+    chg = float(s.iloc[-1] - s.iloc[-2])
+    return {"label": label, "kind": "rate", "last": float(s.iloc[-1]), "chg": chg, "series": s,
+            **card_context(s, "rate", chg)}
+
+
+def _bond_events() -> str:
+    """다가오는 채권 이벤트: 국채 입찰 예정 + 다음 CPI·고용·PCE 발표 + 다음 금통위 (2주 안)."""
+    from datetime import date as _date
+    today = _date.today()
+    ev = []
+    try:
+        auc = b.auctions()
+        for _, r in auc[auc["평가"] == "예정"].sort_values("입찰일").iterrows():
+            d = pd.Timestamp(r["입찰일"]).date()
+            ev.append((d, f"{r['만기'].replace('-Year', '년')}물 입찰 ${r['발행액($bn)']:,.0f}bn"))
+    except Exception:
+        pass
+    from data.fred import fetch_next_release_date
+    for name, sid in (("CPI", "CPIAUCSL"), ("고용보고서", "PAYEMS"), ("PCE", "PCEPI"), ("GDP", "A191RL1Q225SBEA")):
+        try:
+            d = fetch_next_release_date(sid)
+            if d:
+                ev.append((d, f"미 {name}"))
+        except Exception:
+            pass
+    try:
+        from data.kr_calendar import bok_meetings
+        nxt = [d for d in bok_meetings(today.year) if d >= today]
+        if nxt:
+            ev.append((nxt[0], "한은 금통위"))
+    except Exception:
+        pass
+    ev = sorted(e for e in ev if 0 <= (e[0] - today).days <= 14)
+    return " · ".join(f"{d:%m/%d}({_WEEK[d.weekday()]}) {t} " + ("**오늘**" if d == today else f"D-{(d - today).days}")
+                      for d, t in ev)
+
+
+st.html(CONTEXT_CSS)
+_rb_top = b.real_bei_10y()
+_snaps = {k: get_snapshot(k) for k in ("us2y", "us10y", "us30y", "us2s10s")}
+for row in ((("us2y", "미 2년물"), ("us10y", "미 10년물"), ("us30y", "미 30년물")),
+            (("us2s10s", "10Y−2Y"), ("real", "10년 실질금리(TIPS)"), ("bei", "10년 기대인플레(BEI)"))):
+    for col, (key, name) in zip(st.columns(3), row):
+        with col:
+            try:
+                if key == "real":
+                    snap, asof = _rb_snap(_rb_top, "실질 10년", name), f"{_rb_top.index[-1]:%m/%d} 종가"
+                elif key == "bei":
+                    snap, asof = _rb_snap(_rb_top, "기대인플레(BEI)", name), f"{_rb_top.index[-1]:%m/%d} 종가"
+                else:
+                    snap = _snaps[key]
+                    asof = fmt_asof(snap)
+                rate_card(f"bd_{key}", f"{name} · {asof}", snap)
+            except Exception:
+                st.metric(name, "N/A", help="데이터 수집 실패", border=True)
+_events = _bond_events()
+if _events:
+    st.markdown(f"**📅 2주 안 채권 이벤트** · {_events}",
+                help="국채 입찰: TreasuryDirect 예정 공고 · 미국 지표: FRED 발표 일정 · 금통위: 한국은행")
+st.caption("금리 카드: 재무부 종가 + CNBC 실시간 (시각만 = 실시간) · 실질금리·BEI는 재무부 종가 · "
+           "막대 = 1년 최저\\~최고 중 현재 위치 · 기간 변화는 bp")
+
 tabs = st.tabs(["🧩 곡선 분해", "↕️ 곡선 움직임", "🏦 국채 입찰", "💧 연준 유동성", "🇰🇷 한국 국채"])
 
 # ── 1. 곡선 분해 ─────────────────────────────────────
@@ -264,7 +339,7 @@ with tabs[0]:
     c1, c2 = st.columns([3, 2], vertical_alignment="bottom")
     c1.markdown("##### 10년물 금리는 왜 움직였나")
     c1.caption("맨 위는 AI 판단(매일 08:30), 아래 '근거'는 정해진 공식으로 계산한 규칙 기반 분해입니다.")
-    window = c2.segmented_control("변화 기간", list(CHANGE_WINDOWS), default="1개월", key="dec_win") or "1개월"
+    window = c2.segmented_control("변화 기간", list(FLOW_JUDGE_WINDOWS), default="1개월", key="dec_win") or "1개월"
     ai_slot = st.container()  # AI 판단 카드: 아래 규칙 계산이 끝난 뒤 채운다
 
     with st.expander("🔍 근거 ① 규칙 기반 분해 — 실질금리·기대인플레 / 정책 기대·텀프리미엄", expanded=False):
@@ -291,19 +366,9 @@ with tabs[0]:
         if acm.empty:
             st.info("ACM 데이터가 없어 종합 판정을 계산할 수 없습니다.")
         else:
-            with st.popover("⚙️ 판정 설정"):
-                s1, s2 = st.columns(2)
-                noise_bp = s1.number_input("노이즈 임계값 (bp)", 0.0, 20.0, config.ATTR_NOISE_BP, 0.5,
-                                           help="성분 변화의 절댓값이 이보다 작으면 '유의미한 변화 아님'으로 보고 판정에서 제외")
-                gap_bp = s2.number_input("모형 괴리 경고 (bp)", 0.0, 50.0, config.ATTR_TP_MODEL_GAP_BP, 0.5,
-                                         help="ACM과 Kim-Wright 텀프리미엄 변화 차이가 이보다 크면 해석 신뢰도 경고")
-                f1, f2, f3 = st.columns(3)
-                flow_z = f1.number_input("수급 z 임계값", 0.5, 5.0, config.FLOW_Z_THRESHOLD, 0.25,
-                                         help="수급·포지션: 스트레스 지표의 |z|가 이 값 이상이면 '튐'으로 셈")
-                flow_n = int(f2.number_input("'높음' 판정 지표 수", 1, 4, config.FLOW_STRESS_COUNT, 1,
-                                             help="튄 지표가 이 개수 이상이면 수급 스트레스 '높음', 1개 이상이면 '주의'"))
-                flow_win = int(f3.number_input("롤링 z 창 (영업일)", 60, 756, config.FLOW_Z_WINDOW_DAYS, 21,
-                                               help="z-score 기준 기간. 252 = 1년. 주간 데이터는 5로 나눈 주 수"))
+            # 판정 임계값은 config.py 값 고정 (노이즈 bp, 모형 괴리 bp, 수급 z·지표 수·롤링 창)
+            noise_bp, gap_bp = config.ATTR_NOISE_BP, config.ATTR_TP_MODEL_GAP_BP
+            flow_z, flow_n, flow_win = config.FLOW_Z_THRESHOLD, config.FLOW_STRESS_COUNT, config.FLOW_Z_WINDOW_DAYS
 
             common_end = min(rb.index[-1], acm.index[-1])
             since_c = _since(common_end, CHANGE_WINDOWS[window])
@@ -362,9 +427,6 @@ with tabs[0]:
                     st.markdown(f"**유동성 왜곡 점검**  \n{liq_text}",
                                 help="시장 경색 때 TIPS 유동성 프리미엄이 커지면 BEI 하락이 인플레 리스크 프리미엄(D) 하락으로 "
                                      "잘못 읽힙니다. HY 스프레드나 MOVE가 급등하면 판정 위에 경고를 띄웁니다.")
-                st.metric("데이터 정합성 체크", f"{attr.consistency_gap:+.1f}bp", border=True,
-                          help="ACM 텀프리미엄 변화 − 내재 텀프리미엄(C+D) 변화. 수식상 'ACM 10년 변화 − 재무부 10년 변화'와 같아, "
-                               "가정 검증이 아니라 ACM 무이표채(zero-coupon) 금리와 재무부 이표채(par) 금리의 측정 차이를 보여줍니다.")
 
     if not acm.empty:
         _, premium_like = curve_check(curve_c["2 Yr"], curve_c["10 Yr"], curve_c["30 Yr"], noise_bp)
@@ -447,11 +509,9 @@ with tabs[1]:
         stats = stats.reindex([r for r in b.REGIMES if r in stats.index])
         st.dataframe(stats.style.format({"평균_2년": "{:+.1f}bp", "평균_10년": "{:+.1f}bp", "비중": "{:.0f}%"}),
                      width="stretch")
-        for k, v in b.REGIMES.items():
-            st.caption(f"**{k}**: {v}")
-    table = recent.iloc[::-1].head(15)
-    table.index = table.index.strftime("%Y-%m-%d")
-    st.dataframe(table.rename_axis("날짜").style.format({c: "{:+.0f}" for c in recent.columns[:3]}), width="stretch")
+        st.caption("국면 뜻은 위 카드의 ? 도움말 · 불 = 금리 하락, 베어 = 금리 상승 · "
+                   "스티프닝 = 장단기 금리차 확대, 플래트닝 = 축소",
+                   help="\n\n".join(f"**{k}**: {v}" for k, v in b.REGIMES.items()))
 
 # ── 3. 국채 입찰 ─────────────────────────────────────
 with tabs[2]:
@@ -466,8 +526,15 @@ with tabs[2]:
             {"입찰일": "{:%m/%d (%a)}", "발행액($bn)": "{:,.0f}"}), hide_index=True, width="stretch")
 
     st.markdown("##### 최근 입찰 결과 (명목 고정금리 Note·Bond)")
-    show = done.head(20)[["입찰일", "만기", "재개행", "발행액($bn)", "낙찰금리(%)", "응찰률", "응찰률 6회평균",
-                          "해외(%)", "딜러(%)", "딜러(%) 6회평균", "근사 테일(bp)", "평가"]]
+    top = done.head(20)
+    show = pd.DataFrame({
+        "입찰일": top["입찰일"], "만기": top["만기"].str.replace("-Year", "년"), "발행액($bn)": top["발행액($bn)"],
+        "낙찰금리(%)": top["낙찰금리(%)"],
+        "응찰률 (6회 평균)": [f"{x:.2f} ({a:.2f})" if a == a else f"{x:.2f}" for x, a in zip(top["응찰률"], top["응찰률 6회평균"])],
+        "해외(%)": top["해외(%)"],
+        "딜러(%) (6회 평균)": [f"{x:.1f} ({a:.1f})" if a == a else f"{x:.1f}" for x, a in zip(top["딜러(%)"], top["딜러(%) 6회평균"])],
+        "평가": top["평가"],
+    })
 
     def _grade_style(df: pd.DataFrame) -> pd.DataFrame:
         styles = pd.DataFrame("", index=df.index, columns=df.columns)
@@ -477,17 +544,14 @@ with tabs[2]:
 
     st.dataframe(
         show.style.apply(_grade_style, axis=None).format({
-            "입찰일": "{:%Y-%m-%d}", "발행액($bn)": "{:,.0f}", "낙찰금리(%)": "{:.3f}", "응찰률": "{:.2f}",
-            "응찰률 6회평균": "{:.2f}", "해외(%)": "{:.1f}", "딜러(%)": "{:.1f}", "딜러(%) 6회평균": "{:.1f}",
-            "근사 테일(bp)": "{:+.1f}",
+            "입찰일": "{:%Y-%m-%d}", "발행액($bn)": "{:,.0f}", "낙찰금리(%)": "{:.3f}", "해외(%)": "{:.1f}",
         }, na_rep="-"),
         hide_index=True, width="stretch",
     )
     st.caption(
         "평가: 같은 만기 직전 6회 평균 대비 응찰률↑·딜러 비중↓ = 💪 강함, 응찰률↓·딜러 비중↑ = ⚠️ 약함 (딜러는 남은 물량을 떠안는 역할이라 "
         "비중이 높을수록 실수요가 약했다는 뜻). 해외(%) = 해외 중앙은행·기관 등 간접 응찰. "
-        "근사 테일 = 낙찰금리 − 입찰 전 영업일 재무부 종가. 실제 테일은 입찰 직전 WI 금리(유료) 기준이라 "
-        "근사치는 그사이 시장 변동이 섞여 참고용입니다."
+        "괄호 = 같은 만기 직전 6회 평균."
     )
 
     terms = [t for t in ["2-Year", "3-Year", "5-Year", "7-Year", "10-Year", "20-Year", "30-Year"] if t in set(done["만기"])]
@@ -525,10 +589,6 @@ with tabs[3]:
         show_chart(line_chart({"순유동성": d["순유동성"] / d["순유동성"].iloc[0] * 100,
                                "S&P 500": spx_w / spx_w.iloc[0] * 100},
                               "순유동성 vs S&P 500 (시작 = 100)", hline=100, decimals=1))
-    c = st.columns(3)
-    for col, name in zip(c, ["연준 자산", "재무부 계좌(TGA)", "역레포(RRP)"]):
-        with col:
-            show_chart(line_chart({name: d[name]}, f"{name} ($bn)", decimals=0, height=220))
     st.caption("순유동성은 시장에서 널리 쓰는 근사 지표입니다. 위험자산과의 동행은 기간에 따라 달라 인과관계로 해석하면 안 됩니다.")
 
 # ── 5. 한국 국채 (KRX 국채전문유통시장) ─────────────────

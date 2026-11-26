@@ -726,3 +726,109 @@ def render_release_insights(items: list[dict], previous: int = 5) -> None:
             st.html(INSIGHT_CSS + "".join(_insight_html(x, top=False) + "<div style='height:.5rem'></div>" for x in rest))
     st.caption("AI(Claude) 해석 — 숫자는 코드가 계산해 넘긴 값만 쓰도록 대조 검증 · 발표 30분 뒤 반응으로 해석, "
                "장 마감(한국 다음 날 아침) 반응을 한 줄 덧붙임 · 투자 판단의 근거가 아닌 참고용")
+
+
+def rate_card(card_key: str, title: str, snap: dict, days: int = 90) -> None:
+    """금리 카드 (채권 화면 요약 줄): 수준·전일 대비 bp, 1년 범위 막대·기간 변화(bp), 미니 차트.
+    snap: last·chg·series·kind(rate|spread) + card_context 결과."""
+    s, chg = snap["series"], snap["chg"]
+    bp = round(chg * 100, 1) + 0.0
+    value = f"{snap['last']:+.2f}%p" if snap["kind"] == "spread" else f"{snap['last']:.2f}%"
+    with st.container(border=True, key=card_key):
+        st.metric(title, value, f"{bp:+.1f}bp" if bp else "0.0bp",
+                  delta_color="red" if bp > 0 else "blue" if bp < 0 else "gray", delta_arrow="auto" if bp else "off",
+                  help="1년 범위 막대: 최근 1년 최저~최고 중 현재 위치 · 기간 변화는 bp · 미니 차트는 최근 3개월")
+        st.html(context_html(snap))
+        spark = s[s.index >= pd.Timestamp.now() - pd.Timedelta(days=days)]
+        if len(spark) > 1:
+            show_chart(mini_chart(spark, spark.iloc[-1] >= spark.iloc[0], days, height=80))
+    if snap["z"] == snap["z"] and abs(snap["z"]) >= Z_ALERT:
+        st.html(f"<style>.st-key-{card_key} {{ border-color:#f0a35a !important; }}</style>")
+
+
+# ── 화면 맨 위 원문 박스: 미국 증시(주식) · 채권(미 국채·국고채) ─────────────
+def _brief_esc(text: str) -> str:
+    return text.replace("$", "\\$").replace("~", "\\~")
+
+
+def _stale_note(day, today, when: str) -> str:
+    return "" if day == today else f" :gray[(직전 거래일 · 오늘 것은 보통 {when} 게시)]"
+
+
+def render_us_brief() -> None:
+    """미국 증시 맨 위: 평일 한화 ★ 주식 아침 시황(전날 미국장), 토·일 @ehdwl '한국 증시 관련 수치'(금요일 미국장)."""
+    import config
+    from datetime import datetime
+    from data.morning_brief import load_brief, load_latest_morning, plan
+    now = datetime.now()
+    kind, day = plan(now)
+    with st.container(border=True):
+        if kind == "hanwha":
+            m = load_latest_morning(now.date())
+            card = m["cards"].get("주식")
+            if not card:
+                st.markdown("**🌙 미국장 마감 시황**")
+                st.caption("최근 5일 안에 한화 주식 아침 시황 원문이 없습니다"
+                           + (f" · :orange[채널 읽기 실패: {m['error'][:80]}]" if m.get("error") else ""))
+                return
+            st.markdown(f"**🌙 미국장 마감 시황** · {m['day']:%m/%d} 아침"
+                        + _stale_note(m["day"], now.date(), "08:05\\~08:50") + " · 한화투자증권 리서치 (원문)")
+            render_brief_cards({"주식": card}, ("주식",))
+            return
+        f = load_brief("ficc", day).get("ficc")
+        eq = (f or {}).get("equity")
+        if not eq:
+            st.markdown("**🌙 주말 미국장 정리**")
+            st.caption("@ehdwl 토요일 글 대기 중 (보통 토요일 06:30경 게시) · 아래 지수 카드 참고")
+            return
+        st.markdown(f"**🌙 주말 미국장 정리** · {day:%m/%d}(토) · 금요일 미국장 · @ehdwl (원문)")
+        st.markdown(f"**{_brief_esc(eq['title'])}**")
+        if not config.PUBLIC_MODE:
+            st.markdown(f"<small>{_brief_esc(eq['numbers'])}</small>", unsafe_allow_html=True)
+            if eq["rest"]:
+                with st.expander("월요일 한국 증시 전망 더 보기"):
+                    for para in eq["rest"]:
+                        st.markdown(f"<small>{_brief_esc(para)}</small>", unsafe_allow_html=True)
+        st.caption(f"[원문 · {f['time']:%m/%d %H:%M}]({f['link']})")
+
+
+def render_bond_briefs() -> None:
+    """채권 맨 위: 미 국채(한화 ★ 채권 아침 시황, 토·일은 @ehdwl FICC '국채금리' 문단) | 국고채(한화 ★ 채권 마감 시황)."""
+    import config
+    from datetime import datetime
+    from data.morning_brief import load_brief, load_closing, load_latest_morning, plan
+    now = datetime.now()
+    kind, day = plan(now)
+    with st.container(border=True):
+        left, right = st.columns(2, gap="large")
+        with left:
+            if kind == "hanwha":
+                m = load_latest_morning(now.date())
+                card = m["cards"].get("채권")
+                if card:
+                    st.markdown(f"**🌙 미 국채 · 아침 시황** · {m['day']:%m/%d}"
+                                + _stale_note(m["day"], now.date(), "08:05\\~08:50") + " · 한화 (원문)")
+                    render_brief_cards({"채권": card}, ("채권",))
+                else:
+                    st.markdown("**🌙 미 국채 · 아침 시황**")
+                    st.caption("최근 5일 안에 한화 채권 아침 시황 원문이 없습니다")
+            else:
+                f = load_brief("ficc", day).get("ficc")
+                rates = [p for p in (f or {}).get("first", []) if p.startswith("국채금리")]
+                st.markdown(f"**🌙 미 국채 · 주말 정리** · {day:%m/%d}(토) · 금요일 미국장 · @ehdwl (원문)")
+                if rates:
+                    if not config.PUBLIC_MODE:
+                        st.markdown(f"<small>{_brief_esc(rates[0])}</small>", unsafe_allow_html=True)
+                    st.caption(f"[원문 · {f['time']:%m/%d %H:%M}]({f['link']})")
+                else:
+                    st.caption("@ehdwl 토요일 글 대기 중 (보통 토요일 06:30경 게시)")
+        with right:
+            c = load_closing(now.date())
+            card = c["cards"].get("채권")
+            if card:
+                st.markdown(f"**🔔 국고채 · 마감 시황** · {c['day']:%m/%d}"
+                            + _stale_note(c["day"], now.date(), "15:45\\~17:10") + " · 한화 (원문)")
+                render_brief_cards({"채권": card}, ("채권",))
+            else:
+                st.markdown("**🔔 국고채 · 마감 시황**")
+                st.caption("최근 5일 안에 한화 채권 마감 시황 원문이 없습니다")

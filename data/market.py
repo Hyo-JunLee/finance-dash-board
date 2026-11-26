@@ -28,6 +28,7 @@ SUMMARY_ITEMS = {
     "nq":     ("나스닥100 선물", "yahoo", "NQ=F",    "index"),
     "us2y":   ("미국 2년물",    "ust",   "2Y",      "rate"),
     "us10y":  ("미국 10년물",   "ust",   "10Y",     "rate"),
+    "us30y":  ("미국 30년물",   "ust",   "30Y",     "rate"),
     "us2s10s": ("10Y−2Y",      "spread", "10Y-2Y", "spread"),
     "kr3y":   ("국고 3년",      "krx",   "3Y",      "rate"),
     "usdkrw": ("원/달러",       "yahoo", "KRW=X",   "fx"),
@@ -101,6 +102,7 @@ CLOSE_TIMES = {
     "kospi": ("15:30", "Asia/Seoul"), "kosdaq": ("15:30", "Asia/Seoul"), "kospi200": ("15:30", "Asia/Seoul"),
     "spx": ("16:00", "America/New_York"), "ndx": ("16:00", "America/New_York"),
     "us2y": ("15:30", "America/New_York"), "us10y": ("15:30", "America/New_York"),
+    "us30y": ("15:30", "America/New_York"),
     "us2s10s": ("15:30", "America/New_York"), "kr3y": ("15:30", "Asia/Seoul"),
     "vix": ("16:15", "America/New_York"),
 }

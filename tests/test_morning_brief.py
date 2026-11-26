@@ -90,3 +90,21 @@ def test_closing_picks_latest_day_and_ignores_morning():
     day, cards = pick_latest_closing(posts)  # 11/24 마감은 아직 → 11/23 것
     assert day == date(2026, 11, 23) and list(cards) == ["채권", "주식"]
     assert cards["주식"]["numbers"] == ["KOSPI 4,708.54pt -3.31%"]
+
+
+def test_parse_equity_section_stops_at_next_heading():
+    from data.morning_brief import parse_equity
+    text = ("*한국 증시 관련 수치: 큰 폭 하락 후 심리 안정 여부 주목\n\n필라델피아 반도체 지수는 10.73% 급락.\n\n"
+            "한국 증시는 하락 출발 예상.\n\n*FICC: 금, 은 급락\n\n국채금리는 하락.")
+    e = parse_equity(text)
+    assert e["title"] == "큰 폭 하락 후 심리 안정 여부 주목"
+    assert e["numbers"].startswith("필라델피아") and e["rest"] == ["한국 증시는 하락 출발 예상."]
+    assert parse_equity("*FICC: 제목\n\n본문") is None
+
+
+def test_pick_latest_morning_falls_back_to_previous_day():
+    from data.morning_brief import pick_latest
+    posts = [_post(BOND, "2026-11-24 08:11", 1), _post(STOCK, "2026-11-24 08:12", 2),
+             _post("★ 주식 마감 시황 (11/25)\n- KOSPI\n- 마감", "2026-11-25 15:46", 3)]
+    day, cards = pick_latest(posts, "아침", ("채권", "주식", "환율"))   # 11/25 아침 글 없음 → 11/24
+    assert day == date(2026, 11, 24) and list(cards) == ["채권", "주식"]

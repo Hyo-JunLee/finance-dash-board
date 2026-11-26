@@ -5,6 +5,8 @@
 - 일: 토요일 FICC를 그대로
 - 원문이 아직 없으면(공휴일·게시 전) 대시보드 데이터로 만든 숫자 줄만 보여준다
 - 국내 증시 맨 위: 한화 ★ 채권·주식 마감 시황 (보통 15:45~17:10 게시) — 가장 최근 거래일 것
+- 미국 증시 맨 위: 평일 한화 ★ 주식 아침 시황(가장 최근 것), 토·일 @ehdwl 글의 '*한국 증시 관련 수치:' 부분
+- 채권 맨 위: 미 국채 = 한화 ★ 채권 아침 시황(토·일은 @ehdwl FICC '국채금리' 문단), 국고채 = 한화 ★ 채권 마감 시황
 
 화면을 열 때 채널을 직접 읽고 10분간 캐시한다 → 정해진 실행 시각이나 맥 잠자기와 무관.
 """
@@ -21,6 +23,7 @@ HANWHA_KINDS = ("채권", "주식", "환율")
 CLOSING_KINDS = ("채권", "주식")
 FICC_CHANNEL = "ehdwl"
 FICC_FIRST = ("국채금리", "달러화")  # 펼쳐 둘 문단 (나머지는 '더 보기')
+EQUITY_MARK = "*한국 증시 관련 수치:"  # @ehdwl 글의 증시 부분 (첫 문단 = 전날 미국장 관련 수치, 나머지 = 한국 증시 전망)
 _HANWHA_HEAD = re.compile(r"\s*★\s*(\S+)\s*(아침|마감)\s*시황\s*\((\d{1,2})/(\d{1,2})\)")
 
 
@@ -50,13 +53,38 @@ def pick_hanwha(posts: list[dict], day: date, session: str = "아침", kinds: tu
     return out
 
 
-def pick_latest_closing(posts: list[dict]) -> tuple[date | None, dict[str, dict]]:
-    """가장 최근 날짜의 ★ 채권·주식 마감 시황. 오늘 것이 아직이면 직전 거래일 것."""
+def pick_latest(posts: list[dict], session: str, kinds: tuple) -> tuple[date | None, dict[str, dict]]:
+    """가장 최근 날짜의 ★ 아침/마감 시황. 오늘 것이 아직이면 직전 거래일 것."""
     for day in sorted({p["time"].date() for p in posts}, reverse=True):
-        cards = pick_hanwha(posts, day, "마감", CLOSING_KINDS)
+        cards = pick_hanwha(posts, day, session, kinds)
         if cards:
             return day, cards
     return None, {}
+
+
+def pick_latest_closing(posts: list[dict]) -> tuple[date | None, dict[str, dict]]:
+    return pick_latest(posts, "마감", CLOSING_KINDS)
+
+
+def _section(text: str, marker: str) -> tuple[str, list[str]] | None:
+    """'*표제: 제목\n\n문단\n\n문단…' 에서 (제목, 문단들). 다음 '*표제:'가 나오면 거기서 끊는다."""
+    i = (text or "").find(marker)
+    if i < 0:
+        return None
+    body = text[i + len(marker):]
+    nxt = re.search(r"\n\s*\*[^\n*:]{1,30}:", body)
+    body = body[:nxt.start()] if nxt else body
+    title, _, rest = body.strip().partition("\n")
+    return title.strip(), [x.strip() for x in re.split(r"\n\s*\n", rest) if x.strip()]
+
+
+def parse_equity(text: str) -> dict | None:
+    """@ehdwl '*한국 증시 관련 수치:' → {title, numbers: 첫 문단(전날 미국장 관련 수치), rest: 한국 증시 전망 문단들}."""
+    sec = _section(text, EQUITY_MARK)
+    if not sec or not sec[1]:
+        return None
+    title, paras = sec
+    return {"title": title, "numbers": paras[0], "rest": paras[1:]}
 
 
 def parse_ficc(text: str) -> dict | None:
@@ -76,7 +104,7 @@ def pick_ficc(posts: list[dict], day: date) -> dict | None:
         if p["time"].date() == day:
             parsed = parse_ficc(p.get("text") or "")
             if parsed:
-                return {**parsed, "time": p["time"], "link": p["link"]}
+                return {**parsed, "equity": parse_equity(p.get("text") or ""), "time": p["time"], "link": p["link"]}
     return None
 
 
@@ -98,6 +126,17 @@ def load_brief(kind: str, day: date) -> dict:
         return {"kind": kind, "day": day, "ficc": pick_ficc(fetch_since(FICC_CHANNEL, since, max_pages=2), day)}
     except Exception as e:
         return {"kind": kind, "day": day, "error": str(e)}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_latest_morning(today: date) -> dict:
+    """가장 최근 한화 ★ 아침 시황 (최근 5일 안). 평일 08시 전·월요일 아침 게시 전엔 직전 거래일 것. today는 캐시 구분용."""
+    try:
+        day, cards = pick_latest(fetch_since(HANWHA, pd.Timestamp(today - timedelta(days=5)), max_pages=3), "아침",
+                                 HANWHA_KINDS)
+        return {"day": day, "cards": cards}
+    except Exception as e:
+        return {"day": None, "cards": {}, "error": str(e)}
 
 
 @st.cache_data(ttl=600, show_spinner=False)
