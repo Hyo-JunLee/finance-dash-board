@@ -427,3 +427,43 @@ def render_brief_cards(cards: dict, kinds: tuple) -> None:
                 st.markdown(f"<small>{esc(c['comment'])}</small>", unsafe_allow_html=True)
             st.caption(f"[원문 · {c['time']:%H:%M}]({c['link']})")
 
+
+
+# ── 시세 카드 맥락 (1년 범위 막대·기간 변화·이례적 변동) — 오늘의 시황·미국 증시 공용 ──
+Z_ALERT = 2.0  # 오늘 변화가 1년 일간 변동(표준편차)의 이 배수를 넘으면 '이례적'
+CONTEXT_CSS = """<style>
+.cx { font-size:.74rem; line-height:1.35; margin-top:-.35rem; }
+.cx-row { display:flex; justify-content:space-between; opacity:.65; }
+.cx-pos { font-weight:700; opacity:1; }
+.cx-track { position:relative; height:4px; border-radius:2px; margin:.2rem 0 .35rem;
+            background:linear-gradient(90deg, rgba(57,135,229,.55), rgba(255,255,255,.15), rgba(230,103,103,.55)); }
+.cx-dot { position:absolute; top:-3px; width:8px; height:10px; border-radius:2px; background:#fff; }
+.cx-per { opacity:.85; display:flex; justify-content:space-between; gap:.3rem; white-space:nowrap; font-size:.7rem; }
+.cx-alert { margin-top:.3rem; color:#f0a35a; font-weight:700; }
+</style>"""
+
+
+def short_value(v: float, kind: str) -> str:
+    if kind in ("rate", "spread"):
+        return f"{v:.2f}"
+    return f"{v:,.0f}" if abs(v) >= 1000 else f"{v:,.2f}"
+
+
+def context_html(snap: dict) -> str:
+    lo, hi, pos = snap["range"]
+    unit = "bp" if snap["kind"] in ("rate", "spread") else "%"
+    def item(name, v):
+        color = UP_COLOR if v > 0 else DOWN_COLOR if v < 0 else "inherit"
+        shown = f"{v:+.0f}{unit}" if unit == "bp" else f"{v:+.1f}{unit}"
+        return f'<span>{name} <b style="color:{color}">{shown}</b></span>'
+    per = "".join(item(name, v) for name, v in snap["periods"].items() if v == v)
+    z = snap["z"]
+    badge = ""
+    if z == z and abs(z) >= Z_ALERT:
+        badge = (f'<div class="cx-alert">⚡ 이례적 {"상승" if z > 0 else "하락"} · 평소 하루 변동의 {abs(z):.1f}배</div>')
+    return (
+        f'<div class="cx"><div class="cx-row"><span>1년 저 {short_value(lo, snap["kind"])}</span>'
+        f'<span class="cx-pos">{pos:.0f}%</span><span>고 {short_value(hi, snap["kind"])}</span></div>'
+        f'<div class="cx-track"><div class="cx-dot" style="left:calc({pos:.1f}% - 4px)"></div></div>'
+        f'<div class="cx-per">{per}</div>{badge}</div>'
+    )

@@ -9,11 +9,10 @@ from data.econ_calendar import ff_fetched_at, get_recent_indicators, get_week_ac
 from data.market import SUMMARY_ITEMS, fmt_asof, get_snapshot
 from data.news import get_news, load_news_summary
 from data.telegram import load_summary, recent_posts
-from ui import (DOWN_COLOR, UP_COLOR, mini_chart, render_brief_cards, render_issues, render_news, render_post_list,
+from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, context_html, mini_chart, render_brief_cards, render_issues, render_news, render_post_list,
                 render_summary, render_views, show_chart)
 
 PERIODS = {"1개월": 30, "3개월": 90, "6개월": 180, "1년": 365}
-Z_ALERT = 2.0  # 오늘 변화가 1년 일간 변동(표준편차)의 이 배수를 넘으면 '이례적'
 
 
 def _fmt_value(snap: dict, key: str) -> str:
@@ -107,42 +106,7 @@ with st.spinner("시세 불러오는 중..."):
     snaps = {k: get_snapshot(k) for _, keys in CARD_ROWS for k in keys}
 
 
-def _short(v: float, kind: str) -> str:
-    if kind in ("rate", "spread"):
-        return f"{v:.2f}"
-    return f"{v:,.0f}" if abs(v) >= 1000 else f"{v:,.2f}"
-
-
-def _context_html(snap: dict) -> str:
-    lo, hi, pos = snap["range"]
-    unit = "bp" if snap["kind"] in ("rate", "spread") else "%"
-    def item(name, v):
-        color = UP_COLOR if v > 0 else DOWN_COLOR if v < 0 else "inherit"
-        shown = f"{v:+.0f}{unit}" if unit == "bp" else f"{v:+.1f}{unit}"
-        return f'<span>{name} <b style="color:{color}">{shown}</b></span>'
-    per = "".join(item(name, v) for name, v in snap["periods"].items() if v == v)
-    z = snap["z"]
-    badge = ""
-    if z == z and abs(z) >= Z_ALERT:
-        badge = (f'<div class="cx-alert">⚡ 이례적 {"상승" if z > 0 else "하락"} · 평소 하루 변동의 {abs(z):.1f}배</div>')
-    return (
-        f'<div class="cx"><div class="cx-row"><span>1년 저 {_short(lo, snap["kind"])}</span>'
-        f'<span class="cx-pos">{pos:.0f}%</span><span>고 {_short(hi, snap["kind"])}</span></div>'
-        f'<div class="cx-track"><div class="cx-dot" style="left:calc({pos:.1f}% - 4px)"></div></div>'
-        f'<div class="cx-per">{per}</div>{badge}</div>'
-    )
-
-
-st.html("""<style>
-.cx { font-size:.74rem; line-height:1.35; margin-top:-.35rem; }
-.cx-row { display:flex; justify-content:space-between; opacity:.65; }
-.cx-pos { font-weight:700; opacity:1; }
-.cx-track { position:relative; height:4px; border-radius:2px; margin:.2rem 0 .35rem;
-            background:linear-gradient(90deg, rgba(57,135,229,.55), rgba(255,255,255,.15), rgba(230,103,103,.55)); }
-.cx-dot { position:absolute; top:-3px; width:8px; height:10px; border-radius:2px; background:#fff; }
-.cx-per { opacity:.85; display:flex; justify-content:space-between; gap:.3rem; white-space:nowrap; font-size:.7rem; }
-.cx-alert { margin-top:.3rem; color:#f0a35a; font-weight:700; }
-</style>""")
+st.html(CONTEXT_CSS)
 alert_css = []
 for group, keys in CARD_ROWS:
     st.caption(f"**{group}**")
@@ -162,7 +126,7 @@ for group, keys in CARD_ROWS:
                 help="1년 범위 막대: 최근 1년 최저\\~최고 중 현재 위치 · 기간 변화는 금리면 bp, 나머지는 % · "
                      "미니 차트 색은 선택한 차트 기간 동안의 방향",
             )
-            st.html(_context_html(snap))
+            st.html(context_html(snap))
             spark = snap["series"][snap["series"].index >= cutoff]
             if len(spark) > 1:
                 show_chart(mini_chart(spark, spark.iloc[-1] >= spark.iloc[0], PERIODS[period]))

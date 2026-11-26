@@ -4,7 +4,9 @@ import pandas as pd
 import streamlit as st
 
 from data import global_markets as gm
-from ui import UP_COLOR, DOWN_COLOR, line_chart, returns_bar, show_chart, treemap
+from data.market import card_context, fmt_asof
+from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, context_html, line_chart, mini_chart, returns_bar,
+                show_chart, treemap)
 
 RET_COLS = list(gm.PERIODS)
 COLOR_RANGE = {"1일": 3, "1주": 6, "1개월": 10, "YTD": 30, "1년": 40}  # 히트맵 색 포화 기준(±%)
@@ -30,17 +32,43 @@ def _since(df: pd.DataFrame, period) -> pd.DataFrame:
 with st.spinner("시세 불러오는 중..."):
     idx_closes = gm.get_closes(tuple(gm.INDICES))
 
-# ── 주요 지수 (4개, 한눈에) ───────────────────────────
+# ── 주요 지수 카드 (오늘의 시황 카드와 같은 모양) ──────────────
+INDEX_CHART_DAYS = {"1개월": 30, "3개월": 90, "6개월": 180, "1년": 365}
 live_closes, status = gm.apply_market_status(idx_closes)
-table = gm.returns_table(live_closes).reindex([t for t in gm.INDICES if t in live_closes])
-table = table.drop(columns="기준일").join(status)
-table.insert(0, "지수", [gm.INDICES[t][0] for t in table.index])
-st.dataframe(
-    table.style.map(_ret_color, subset=RET_COLS)
-    .format({"현재": "{:,.2f}", "기준 시각": "{:%m/%d %H:%M}", **{c: "{:+.2f}%" for c in RET_COLS}}, na_rep="-"),
-    hide_index=True, width="stretch", height=38 + 35 * len(table),
-)
-st.caption("기준 시각은 한국 시간 · 장중은 최신 체결 시각(Yahoo, 최대 15분 지연), 마감은 뉴욕 정규장 마감 시각")
+i1, i2 = st.columns([3, 2], vertical_alignment="bottom")
+i1.subheader("📈 주요 지수")
+idx_period = i2.segmented_control("차트 기간", list(INDEX_CHART_DAYS), default="3개월", key="idx_card_period") or "3개월"
+st.html(CONTEXT_CSS)
+idx_alert_css = []
+for col, t in zip(st.columns(len(gm.INDICES)), gm.INDICES):
+    s = live_closes[t].dropna() if t in live_closes else pd.Series(dtype=float)
+    with col, st.container(border=True, key=f"idx_{t.strip('^')}"):
+        name = gm.INDICES[t][0]
+        if len(s) < 2 or t not in status.index:
+            st.metric(name, "N/A", help="데이터 수집 실패")
+            continue
+        last, prev = float(s.iloc[-1]), float(s.iloc[-2])
+        state, asof = status.loc[t, "상태"], status.loc[t, "기준 시각"]
+        live = state.startswith("🟢")
+        snap = {"kind": "index", "asof": asof, "asof_kind": "live" if live else "close", "key": t,
+                **card_context(s, "index", last - prev)}
+        y1 = gm.period_return(s, gm.PERIODS["1년"])
+        if y1 is not None:
+            snap["periods"]["1년"] = y1
+        st.metric(f"{'🟢 ' if live else ''}{name} · {fmt_asof(snap)}", f"{last:,.2f}",
+                  f"{last - prev:+,.2f} ({(last / prev - 1) * 100:+.2f}%)",
+                  delta_color="red" if last > prev else "blue" if last < prev else "gray",
+                  help="1년 범위 막대: 최근 1년 최저\\~최고 중 현재 위치 · 기간 변화는 % · 미니 차트 색은 선택한 기간 동안의 방향")
+        st.html(context_html(snap))
+        spark = s[s.index >= pd.Timestamp(datetime.now()) - pd.Timedelta(days=INDEX_CHART_DAYS[idx_period])]
+        if len(spark) > 1:
+            show_chart(mini_chart(spark, spark.iloc[-1] >= spark.iloc[0], INDEX_CHART_DAYS[idx_period]))
+        if snap["z"] == snap["z"] and abs(snap["z"]) >= Z_ALERT:
+            idx_alert_css.append(f".st-key-idx_{t.strip('^')} {{ border-color:#f0a35a !important; }}")
+if idx_alert_css:
+    st.html(f"<style>{' '.join(idx_alert_css)}</style>")
+st.caption("기준 시각은 한국 시간 · 🟢 장중은 최신 체결 시각(Yahoo, 최대 15분 지연), '종가'는 뉴욕 정규장 마감 · "
+           f"막대 = 1년 최저\\~최고 중 현재 위치 · ⚡ = 평소 하루 변동의 {Z_ALERT:.0f}배 이상")
 
 # ── S&P 500 히트맵 ───────────────────────────────────
 h1, h2 = st.columns([3, 2], vertical_alignment="bottom")

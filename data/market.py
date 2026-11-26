@@ -169,7 +169,7 @@ def get_snapshot(key: str) -> dict | None:
         "asof": asof,            # KST, 항상 시각 포함
         "asof_kind": asof_kind,  # live=실시간, close=공식 종가, last=마지막 체결, date=시각 모름
         "series": s,
-        **_context(s, kind, last - prev),
+        **card_context(s, kind, last - prev),
     }
 
 
@@ -193,7 +193,7 @@ def _changes(s: pd.Series, kind: str) -> pd.Series:
     return s.diff() * 100 if kind in ("rate", "spread") else s.pct_change() * 100
 
 
-def _context(s: pd.Series, kind: str, chg: float) -> dict:
+def card_context(s: pd.Series, kind: str, chg: float) -> dict:
     """카드 맥락 정보: 1년 범위 위치, 오늘 변화가 평소의 몇 배인지(z), 기간별 변화."""
     now = s.index[-1]
     y1 = s[s.index >= now - pd.Timedelta(days=365)]
