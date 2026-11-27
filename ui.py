@@ -15,6 +15,14 @@ _NEWS_CSS = """
 .news-tag { display: inline-block; padding: 0 0.4rem; margin-right: 0.35rem; border-radius: 0.3rem;
             background: rgba(76,154,255,0.18); font-size: 0.72rem; }
 .news-item mark { background: rgba(255,200,0,0.35); color: inherit; padding: 0 1px; }
+.news-topic { display: inline-block; padding: 0 0.4rem; margin-left: 0.35rem; border-radius: 999px;
+              border: 1px solid rgba(255,255,255,0.18); font-size: 0.68rem; opacity: 0.8; }
+.news-more { margin-top: 0.25rem; font-size: 0.8rem; }
+.news-more summary { cursor: pointer; opacity: 0.7; }
+.news-more ul { margin: 0.25rem 0 0 1rem; padding: 0; }
+.news-more li { margin: 0.15rem 0; }
+.news-more a { font-weight: 400 !important; }
+.news-meta-i { font-size: 0.72rem; opacity: 0.55; }
 </style>
 """
 
@@ -40,23 +48,34 @@ def _highlight(text: str, query: str) -> str:
     return pattern.sub(lambda m: f"<mark>{m.group(0)}</mark>", text)
 
 
-def render_news(df: pd.DataFrame, query: str = "", show_summary: bool = True) -> None:
-    """뉴스 목록을 제목(링크)·출처·시각·요약 형태로 출력."""
+def render_news(df: pd.DataFrame, query: str = "", show_summary: bool = True, others: dict | None = None) -> None:
+    """뉴스 목록: 제목(링크)·출처·시각·주제 칩·요약. others={묶음 번호: 같은 사건의 다른 기사 df}면 '외 N건' 펼치기."""
     if df.empty:
         st.caption("표시할 뉴스가 없습니다.")
         return
     now = pd.Timestamp.now()
+    e = html.escape
     items = []
     for row in df.itertuples():
         summary = (
             f'<div class="news-sum">{_highlight(row.summary, query)}</div>'
             if show_summary and row.summary else ""
         )
+        topics = getattr(row, "group_topics", None) or getattr(row, "topics", None) or []
+        chips = "".join(f'<span class="news-topic">{e(t)}</span>' for t in topics[:3])
+        more = ""
+        rest = (others or {}).get(getattr(row, "group", None))
+        if rest is not None and len(rest):
+            srcs = list(dict.fromkeys(rest["source"]))
+            links = "".join(f'<li><a href="{e(r.link, quote=True)}" target="_blank">{e(r.source)} · {_highlight(r.title, query)}</a>'
+                            f' <span class="news-meta-i">{relative_time(r.time, now)}</span></li>' for r in rest.itertuples())
+            more = (f'<details class="news-more"><summary>같은 사건 외 {len(rest)}건 · {e(", ".join(srcs[:4]))}'
+                    f'{" 등" if len(srcs) > 4 else ""}</summary><ul>{links}</ul></details>')
         items.append(
             f'<div class="news-item">'
-            f'<a href="{html.escape(row.link, quote=True)}" target="_blank">{_highlight(row.title, query)}</a>'
-            f'<div class="news-meta"><span class="news-tag">{html.escape(row.source)}</span>'
-            f'{relative_time(row.time, now)}</div>{summary}</div>'
+            f'<a href="{e(row.link, quote=True)}" target="_blank">{_highlight(row.title, query)}</a>'
+            f'<div class="news-meta"><span class="news-tag">{e(row.source)}</span>'
+            f'{relative_time(row.time, now)}{chips}</div>{summary}{more}</div>'
         )
     st.markdown(_NEWS_CSS + "".join(items), unsafe_allow_html=True)
 
@@ -895,3 +914,30 @@ def render_bond_briefs() -> None:
             else:
                 st.markdown("**🔔 국고채 · 마감 시황**")
                 st.caption("최근 5일 안에 한화 채권 마감 시황 원문이 없습니다")
+
+
+# ── 🎲 선물·옵션 (국내·미국 증시) ─────────────────────────
+def term_structure_chart(curves: dict, height: int = 220):
+    """VIX 기간구조: {라벨: Series(index=만기 이름, 값)} 여러 개 (오늘·1주 전·1개월 전)."""
+    import plotly.graph_objects as go
+    fig = go.Figure()
+    styles = [dict(width=2.4), dict(width=1.4, dash="dot"), dict(width=1.2, dash="dash")]
+    for (label, s), color, style in zip(curves.items(), ["#f0a35a", SERIES_COLORS[0], "rgba(255,255,255,0.45)"], styles):
+        fig.add_scatter(x=list(s.index), y=list(s.values), name=label, mode="lines+markers",
+                        line=dict(color=color, **style), marker=dict(size=6), hovertemplate="%{x} %{y:.2f}<extra>" + label + "</extra>")
+    fig = _base_layout(fig, "VIX 기간구조 (9일 → 6개월)", "", height, legend=True)
+    fig.update_layout(hovermode="closest")
+    return fig
+
+
+def expiry_line(today=None, markets=("국내", "미국"), n: int = 4) -> str:
+    """다가오는 옵션 만기일 한 줄 (D-day, 7일 안이면 강조)."""
+    from datetime import date as _date
+    from data.derivatives import expiries
+    today = today or _date.today()
+    parts = []
+    for e in [x for x in expiries(today) if x["시장"] in markets][:n]:
+        d = (e["날짜"] - today).days
+        tag = "**오늘**" if d == 0 else f"**D-{d}**" if d <= 7 else f"D-{d}"
+        parts.append(f"{e['날짜']:%m/%d}({'월화수목금토일'[e['날짜'].weekday()]}) {e['시장']} {e['이름']} {tag}")
+    return " · ".join(parts)

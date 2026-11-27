@@ -8,8 +8,8 @@ from data import krx, naver_live
 from data.intraday import kr_intraday, session_bounds
 from data.market import SUMMARY_ITEMS, fmt_asof, get_snapshot
 from data.morning_brief import CLOSING_KINDS, load_closing
-from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, index_card, investor_chart, render_brief_cards, returns_bar,
-                show_chart, treemap)
+from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, expiry_line, index_card, investor_chart, render_brief_cards,
+                returns_bar, show_chart, treemap)
 
 st.title("국내 증시")
 
@@ -133,6 +133,43 @@ for col, mkt in zip(st.columns(2, gap="large"), ("KOSPI", "KOSDAQ")):
                                                 "비차익은 바스켓(여러 종목 묶음) 매매로 주로 외국인·기관의 방향성 매매")
         show_chart(investor_chart(inv, f"최근 {len(inv)}거래일 순매수 (억원)"))
 st.caption("네이버 증권 · 순매수 = 매수 − 매도 (억원) · 장중 값은 잠정치로 장 마감 후 확정 · 외국인 순매도가 이어지면 지수 하락 압력이 커지는 경우가 많음")
+
+# ── 🎲 선물·옵션: 코스피 200 선물·베이시스·선물 투자자별 순매수·옵션 만기 ─────────
+def _derivatives_kr() -> None:
+    from data import derivatives as dv
+    st.subheader("🎲 선물·옵션")
+    try:
+        f = dv.kr_futures()
+    except Exception as e:
+        st.caption(f"코스피 200 선물을 불러오지 못했습니다: {str(e)[:80]}")
+        return
+    spot = get_snapshot("kospi200")
+    c = st.columns(5)
+    c[0].metric(f"{'🟢 ' if f['open'] else ''}{f['name']} · {f['time']:%H:%M}", f"{f['price']:,.2f}",
+                f"{f['chg']:+,.2f} ({f['pct']:+.2f}%)", delta_color="red" if f["chg"] > 0 else "blue" if f["chg"] < 0 else "gray",
+                border=True, help="근월물 · 네이버 증권")
+    if spot:
+        basis = f["price"] - spot["last"]
+        c[1].metric("베이시스 (선물 − 현물)", f"{basis:+.2f}p", "콘탱고 (선물 > 현물)" if basis > 0 else "백워데이션 (선물 < 현물)",
+                    delta_color="off", delta_arrow="off", border=True,
+                    help="선물이 현물보다 싸면(백워데이션) 현물 매도·선물 매수 차익거래가 늘어 프로그램 매도 압력이 되기 쉬움. "
+                         "이론 베이시스(금리·배당 반영)와의 차이가 아니라 단순 차이 · 선물 15:45, 현물 15:30 마감이라 마감 직후엔 시차가 섞임")
+    for col, name in zip(c[2:], ("외국인", "기관", "개인")):
+        col.metric(f"선물 {name} 순매수", f"{f['investors'][name]:+,.0f}", f"{pd.Timestamp(f['bizdate']):%m/%d}" if f["bizdate"] else None,
+                   delta_color="off", delta_arrow="off", border=True,
+                   help="코스피 200 선물 투자자별 순매수 (네이버, 단위 미표기 — 계약으로 보임). 외국인 선물 순매수는 "
+                        "현물 지수 방향과 함께 움직이는 경우가 많아 국내 시장에서 가장 많이 보는 수급 지표")
+    try:
+        h = dv.kr_futures_investors(20)
+        show_chart(investor_chart(h, f"코스피 200 선물 투자자별 순매수 (최근 {len(h)}거래일)"))
+    except Exception as e:
+        st.caption(f"선물 투자자별 이력을 불러오지 못했습니다: {str(e)[:80]}")
+    st.markdown("**📅 옵션 만기** · " + expiry_line(markets=("국내", "미국")),
+                help="국내 = 매월 둘째 목요일, 3·6·9·12월은 선물·옵션 동시만기 · 미국 = 셋째 금요일 (휴일 순연은 반영 안 함)")
+    st.caption("변동성지수(VKOSPI)는 무료로 받을 수 있는 소스를 찾지 못해 넣지 않았습니다.")
+
+
+_derivatives_kr()
 
 tabs = st.tabs(["🏭 업종별 등락", "🗺️ 시가총액 상위", "🔥 등락·거래대금 상위", "📦 ETF"])
 

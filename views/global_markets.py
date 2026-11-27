@@ -7,8 +7,8 @@ from data import global_markets as gm
 from data.earnings import KST_HINT, upcoming
 from data.intraday import session_bounds, us_intraday
 from data.market import SUMMARY_ITEMS, card_context, fmt_asof, get_snapshot
-from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, index_card, line_chart, render_us_brief, returns_bar,
-                show_chart, treemap)
+from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, expiry_line, index_card, line_chart, render_us_brief,
+                returns_bar, show_chart, term_structure_chart, treemap)
 
 RET_COLS = list(gm.PERIODS)
 COLOR_RANGE = {"1일": 3, "1주": 6, "1개월": 10, "YTD": 30, "1년": 40}  # 히트맵 색 포화 기준(±%)
@@ -133,6 +133,57 @@ if len(breadth) > 6:
                           hline=50, hline_label="50%", decimals=0, height=240))
     st.caption("지수는 시가총액 가중이라 대형 몇 종목이 끌어올릴 수 있음 · 이 비율은 종목 수 기준이라 '얼마나 많은 종목이 함께 오르는지'를 봄 · "
                "지수 상승 중 비율이 떨어지면 상승이 좁아지는 신호")
+
+# ── 🎲 변동성·포지션: VIX 기간구조·SKEW·VVIX·CFTC S&P 선물 포지션·옵션 만기 ─────────
+def _derivatives_us() -> None:
+    from data import derivatives as dv
+    st.subheader("🎲 변동성·포지션")
+    try:
+        vol = dv.vol_indices()
+    except Exception as e:
+        st.caption(f"변동성 지수를 불러오지 못했습니다: {str(e)[:80]}")
+        vol = None
+    if vol is not None:
+        last = vol.ffill().iloc[-1]
+        ago = lambda days: vol[vol.index <= vol.index[-1] - pd.Timedelta(days=days)].ffill().iloc[-1]
+        term = lambda row: pd.Series([row[t] for t in dv.VIX_TERM], index=list(dv.VIX_TERM.values()))
+        c0, c1, c2, c3 = st.columns([2.2, 1, 1, 1], gap="medium")
+        with c0:
+            show_chart(term_structure_chart({"오늘": term(last), "1주 전": term(ago(7)), "1개월 전": term(ago(30))}))
+        ratio, ratio_w = last["^VIX"] / last["^VIX3M"], ago(7)["^VIX"] / ago(7)["^VIX3M"]
+        c1.metric("VIX / VIX3M", f"{ratio:.2f}", f"1주 전 {ratio_w:.2f}", delta_color="off", delta_arrow="off",
+                  border=True, help=dv.term_state(ratio) + " · 1 이상 = 백워데이션")
+        c1.caption(dv.term_state(ratio).split(" — ")[0] + (" ⚠️" if ratio >= 1 else ""))
+        for col, t, desc in ((c2, "^SKEW", "S&P 500 급락(꼬리위험)에 대비한 옵션 수요. 100 = 정규분포, 높을수록 급락 헤지 수요 큼"),
+                             (c3, "^VVIX", "VIX 옵션의 내재변동성 = 변동성의 변동성. 높으면 VIX가 크게 튈 수 있다는 기대")):
+            s1 = vol[t].dropna()
+            pct = (s1 < s1.iloc[-1]).mean() * 100
+            col.metric(dv.TAIL[t], f"{s1.iloc[-1]:.1f}", f"1년 중 상위 {100 - pct:.0f}%", delta_color="off",
+                       delta_arrow="off", border=True, help=desc + f" · 기준 {s1.index[-1]:%m/%d}")
+    try:
+        pos = dv.cftc_spx()
+        l, r = st.columns([2.2, 3], gap="medium")
+        with l:
+            last_pos, prev_pos = pos.iloc[-1], pos.iloc[-2]
+            for name, desc in (("자산운용사", "연기금·뮤추얼펀드 등 실수요 장기 투자자. 보통 순매수(롱)"),
+                               ("레버리지 펀드", "헤지펀드·CTA 등 단기 투기·차익거래. 보통 순매도(숏), 급변하면 포지션 정리 신호")):
+                st.metric(f"S&P 500 선물 · {name} 순포지션", f"{last_pos[name] / 1e4:+,.1f}만 계약",
+                          f"주간 {(last_pos[name] - prev_pos[name]) / 1e4:+,.1f}만", delta_color="off", delta_arrow="off",
+                          border=True, help=desc + " · CFTC TFF, E-mini·Micro 등 통합")
+            st.caption(f"{pos.index[-1]:%m/%d}(화) 기준 · {pos.index[-1] + pd.Timedelta(days=3):%m/%d}(금) 발표 · 주간")
+        with r:
+            show_chart(line_chart({c: pos[c] / 1e4 for c in pos.columns}, "S&P 500 선물 순포지션 (만 계약, 3년)",
+                                  hline=0, decimals=1, height=260))
+    except Exception as e:
+        st.caption(f"CFTC 포지션을 불러오지 못했습니다: {str(e)[:80]}")
+    st.markdown("**📅 옵션 만기** · " + expiry_line(markets=("미국", "국내")),
+                help="미국 월물 옵션 = 매월 셋째 금요일, 3·6·9·12월은 지수 선물·옵션·개별 주식 선물·옵션이 함께 끝나는 "
+                     "쿼드러플 위칭 · 국내 = 매월 둘째 목요일, 분기월은 선물·옵션 동시만기 (휴일 순연은 반영 안 함)")
+    st.caption("VIX·SKEW·VVIX: Cboe 지수(Yahoo, 일봉) · 기간구조가 오른쪽 아래로 기울면(9일 > 3개월) 단기 공포가 큰 상태")
+
+
+_derivatives_us()
+st.divider()
 
 # ── 주요 종목 시세표 (investing.com 스타일) ──────────────
 SEMIS = ["NVDA", "AVGO", "AMD", "QCOM", "TXN", "AMAT", "MU", "TSM", "SOXL", "SOXS"]

@@ -128,3 +128,11 @@ def load_news_summary() -> dict | None:
         return json.loads(config.NEWS_SUMMARY_FILE.read_text())
     except (FileNotFoundError, ValueError):
         return None
+
+
+@st.cache_data(ttl=config.TTL_NEWS, show_spinner=False)
+def get_news_annotated() -> pd.DataFrame:
+    """get_news + 주제 태그·같은 사건 묶음 (data/news_topics.py)."""
+    from data.news_topics import annotate
+    news = get_news()
+    return annotate(news) if not news.empty else news
