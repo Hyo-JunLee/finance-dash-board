@@ -36,3 +36,14 @@ def test_board_shows_flash_badge(monkeypatch):
     ui.release_board(pd.DataFrame([r]), today=date(2026, 12, 10))
     assert "⚡속보" in out[-1] and '<div class="rb-row up">' in out[-1]
     assert "⚡속보" in ui.release_badge_html(r, today=date(2026, 12, 10))
+
+
+def test_mini_chart_week_ticks_one_per_session():
+    """미국장(한국 시간 23:30~06:00)이 자정을 넘겨도 세션당 눈금 하나."""
+    idx = []
+    for d in ("2026-11-23", "2026-11-24", "2026-11-25"):
+        start = pd.Timestamp(f"{d} 23:30")
+        idx += list(pd.date_range(start, start + pd.Timedelta(hours=6, minutes=30), freq="15min"))
+    s = pd.Series(range(len(idx)), index=pd.DatetimeIndex(idx), dtype=float)
+    fig = ui.mini_chart(s, True, 7)
+    assert list(fig.layout.xaxis.ticktext) == ["11/24", "11/25"]  # 첫 세션(11/23)은 왼쪽 끝이라 생략

@@ -35,6 +35,7 @@ CNBC_CHART = "https://ts-api.cnbc.com/harmony/app/charts/5D.json"
 
 
 def _cnbc_intraday(symbol: str) -> pd.Series:
+    """CNBC 1분봉 (최근 5거래일 전부, 미 동부 시각)."""
     import requests
     bars = requests.get(CNBC_CHART, params={"symbol": symbol}, headers={"User-Agent": "Mozilla/5.0"},
                         timeout=15).json()["barData"]["priceBars"]

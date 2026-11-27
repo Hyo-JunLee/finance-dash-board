@@ -7,13 +7,23 @@ import config
 from data.consensus import parse_value
 from data.econ_calendar import (ff_fetched_at, get_recent_indicators, get_week_actuals, get_week_calendar,
                                  refresh_bucket)
+from data.intraday import session_bounds
 from data.market import SUMMARY_ITEMS, fmt_asof, get_snapshot
 from data.news import get_news, load_news_summary
 from data.telegram import load_summary, recent_posts
-from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, context_html, mini_chart, render_brief_cards, render_issues,
+from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, context_html, mini_chart, session_chart, render_brief_cards, render_issues,
                 release_board, render_news, render_post_list, render_release_insights, render_summary, render_views, show_chart)
 
-PERIODS = {"1개월": 30, "3개월": 90, "6개월": 180, "1년": 365}
+PERIODS = {"1일": 1, "1주": 7, "1개월": 30, "3개월": 90, "6개월": 180, "1년": 365}  # 1일·1주는 장중 분봉
+# 카드별 장중 데이터 (출처, 심볼, 1일 가로축 세션). 국고 3년은 장중 데이터가 없어 일봉으로 대신
+INTRADAY = {
+    "kospi": ("naver", "KOSPI", "kr"), "kosdaq": ("naver", "KOSDAQ", "kr"),
+    "spx": ("yahoo", "^GSPC", "us"), "ndx": ("yahoo", "^IXIC", "us"), "vix": ("yahoo", "^VIX", "vix"),
+    "es": ("yahoo", "ES=F", "fut"), "nq": ("yahoo", "NQ=F", "fut"), "wti": ("yahoo", "CL=F", "fut"),
+    "gold": ("yahoo", "GC=F", "fut"), "dxy": ("yahoo", "DX-Y.NYB", "fut"), "usdkrw": ("yahoo", "KRW=X", "fut"),
+    "btc": ("yahoo", "BTC-USD", "24h"),
+    "us2y": ("cnbc", "US2Y", "fut"), "us10y": ("cnbc", "US10Y", "fut"), "us2s10s": ("cnbc", "US10Y-US2Y", "fut"),
+}
 
 
 def _fmt_value(snap: dict, key: str) -> str:
@@ -49,11 +59,11 @@ def _is_flat(snap: dict) -> bool:
 
 
 # ── 헤더 ─────────────────────────────────────────────
-head_l, head_r = st.columns([3, 1], vertical_alignment="bottom")
+head_l, head_r = st.columns([3, 2], vertical_alignment="bottom")
 head_l.title("오늘의 시황")
 head_l.caption(f"조회 시각 {datetime.now():%Y-%m-%d %H:%M} (KST) · 카드 시각은 KST (시각만 = 실시간, '종가' = 공식 마감) · "
                f"막대 = 1년 최저\\~최고 중 현재 위치 · 차트 색 = 선택 기간 방향 · ⚡ = 평소 하루 변동의 {Z_ALERT:.0f}배 이상")
-period = head_r.segmented_control("차트 기간", list(PERIODS), default="3개월") or "3개월"
+period = head_r.segmented_control("차트 기간", list(PERIODS), default="1일") or "1일"
 
 # ── 아침 시황 (원문 카드, AI 없음): 월~금 한화 · 토 @ehdwl FICC · 일 토요일 것 ──────
 def _esc(text: str) -> str:
@@ -93,7 +103,6 @@ def _morning_brief() -> None:
 
 
 _morning_brief()
-cutoff = pd.Timestamp(datetime.now() - timedelta(days=PERIODS[period]))
 
 # ── 요약 카드 (자산군별) ─────────────────────────────
 CARD_ROWS = [
@@ -106,6 +115,35 @@ CARD_ROWS = [
 
 with st.spinner("시세 불러오는 중..."):
     snaps = {k: get_snapshot(k) for _, keys in CARD_ROWS for k in keys}
+
+
+def _load_intraday(label: str) -> dict:
+    """차트 기간 1일·1주: 카드별 장중 시계열 {key: Series} (못 받은 카드는 빠짐 → 일봉으로 대신)."""
+    from data.intraday import cnbc_intraday, kr_intraday, us_intraday
+    out = {}
+    try:
+        yh = us_intraday(tuple(sym for src, sym, _ in INTRADAY.values() if src == "yahoo"), label)
+    except Exception:
+        yh = {}
+    rates = {}
+    for key, (src, sym, _) in INTRADAY.items():
+        try:
+            if src == "yahoo" and sym in yh:
+                out[key] = yh[sym]
+            elif src == "naver":
+                out[key] = kr_intraday(sym, label)
+            elif src == "cnbc" and "-" not in sym:
+                out[key] = rates[sym] = cnbc_intraday(sym, label)
+        except Exception:
+            continue
+    if "US10Y" in rates and "US2Y" in rates:  # 10Y−2Y = 같은 시각끼리 차이
+        both = pd.concat([rates["US10Y"], rates["US2Y"]], axis=1, join="inner").dropna()
+        if len(both) > 1:
+            out["us2s10s"] = both.iloc[:, 0] - both.iloc[:, 1]
+    return out
+
+
+intraday = _load_intraday(period) if period in ("1일", "1주") else {}
 
 
 st.html(CONTEXT_CSS)
@@ -129,9 +167,20 @@ for group, keys in CARD_ROWS:
                      "미니 차트 색은 선택한 차트 기간 동안의 방향",
             )
             st.html(context_html(snap))
-            spark = snap["series"][snap["series"].index >= cutoff]
-            if len(spark) > 1:
-                show_chart(mini_chart(spark, spark.iloc[-1] >= spark.iloc[0], PERIODS[period]))
+            intr = intraday.get(key)
+            if intr is not None and len(intr) > 1:  # 1일·1주: 장중
+                if period == "1일":
+                    bounds = session_bounds(intr, INTRADAY[key][2])
+                    show_chart(session_chart(intr, snap["chg"] >= 0, *bounds, base=snap["last"] - snap["chg"]))
+                else:
+                    show_chart(mini_chart(intr, intr.iloc[-1] >= intr.iloc[0], PERIODS[period]))
+            else:
+                days = PERIODS[period] if PERIODS[period] > 7 else 30  # 장중 데이터 없는 카드(국고 3년 등)는 일봉 1개월
+                spark = snap["series"][snap["series"].index >= pd.Timestamp(datetime.now() - timedelta(days=days))]
+                if len(spark) > 1:
+                    show_chart(mini_chart(spark, spark.iloc[-1] >= spark.iloc[0], days))
+                    if PERIODS[period] <= 7:
+                        st.caption("장중 데이터 없음 · 일봉 1개월")
             if snap["z"] == snap["z"] and abs(snap["z"]) >= Z_ALERT:
                 alert_css.append(f".st-key-card_{key} {{ border-color:#f0a35a !important; }}")
 if alert_css:

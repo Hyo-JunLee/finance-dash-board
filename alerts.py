@@ -6,6 +6,8 @@
 - 시간대 제한 없이 생기는 즉시 보냄 (미국장 새벽 변동 포함)
 - .env에 TELEGRAM_BOT_TOKEN·TELEGRAM_CHAT_ID가 없으면 보내지 않는다
 2) 🧠 발표 해석 (data/release_insight.py): 중요 지표 발표 30분 뒤 한 번 claude -p 로 해석 → 화면·텔레그램
+3) 미 국채 2년·10년 큰 변동 (data/rate_alerts.py): 하루 ±8/12/16bp, 30분 ±4bp, 10Y−2Y 하루 ±6bp
+   (이 세 항목은 1)의 이례적 변동 점검에서 뺀다)
 
   python alerts.py            # 점검 후 보냄
   python alerts.py --test     # 테스트 메시지 1건
@@ -29,6 +31,7 @@ import config  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("alerts")
 STATE = config.CACHE_DIR / "alert_state.json"
+RATE_KEYS = {"us2y", "us10y", "us2s10s"}
 DASHBOARD_URL = config.DASHBOARD_URL  # 휴대폰에서 바로 열 주소 (.env, 예: Tailscale 주소)
 
 
@@ -57,6 +60,8 @@ def check(now: datetime | None = None) -> list[str]:
         sent = set()
     out, new_keys = [], []
     for key in SUMMARY_ITEMS:
+        if key in RATE_KEYS:  # 미 2년·10년·10Y−2Y는 금리 전용 알림(data/rate_alerts.py)이 맡음
+            continue
         try:
             snap = get_snapshot(key)
         except Exception:
@@ -92,6 +97,12 @@ def main() -> int:
             check()
         except Exception as e:
             log.exception(f"알림 점검 실패: {e}")
+            failed = True
+        try:
+            from data.rate_alerts import check_and_send
+            check_and_send(send, DASHBOARD_URL, log=log)
+        except Exception as e:
+            log.exception(f"금리 알림 실패: {e}")
             failed = True
     try:  # 발표 해석은 텔레그램 설정이 없어도 만들어 화면에 둔다
         from data.release_insight import check_and_run

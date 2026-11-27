@@ -5,6 +5,7 @@ import streamlit as st
 
 from data import global_markets as gm
 from data.earnings import KST_HINT, upcoming
+from data.intraday import session_bounds, us_intraday
 from data.market import SUMMARY_ITEMS, card_context, fmt_asof, get_snapshot
 from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, index_card, line_chart, render_us_brief, returns_bar,
                 show_chart, treemap)
@@ -35,12 +36,32 @@ with st.spinner("시세 불러오는 중..."):
     idx_closes = gm.get_closes(tuple(gm.INDICES))
 
 # ── 주요 지수 카드 (오늘의 시황 카드와 같은 모양) ──────────────
-INDEX_CHART_DAYS = {"1개월": 30, "3개월": 90, "6개월": 180, "1년": 365}
+INDEX_CHART_DAYS = {"1일": 1, "1주": 7, "1개월": 30, "3개월": 90, "6개월": 180, "1년": 365}  # 1일·1주는 장중 분봉
 live_closes, status = gm.apply_market_status(idx_closes)
 i1, i2 = st.columns([3, 2], vertical_alignment="bottom")
 i1.subheader("📈 주요 지수")
-idx_period = i2.segmented_control("차트 기간", list(INDEX_CHART_DAYS), default="3개월", key="idx_card_period") or "3개월"
+idx_period = i2.segmented_control("차트 기간", list(INDEX_CHART_DAYS), default="1일", key="idx_card_period") or "1일"
 st.html(CONTEXT_CSS)
+_intra = {}
+if idx_period in ("1일", "1주"):  # 지수 4개 + 선물 2개 장중 분봉을 한 번에
+    try:
+        _intra = us_intraday(tuple(gm.INDICES) + ("ES=F", "NQ=F"), idx_period)
+    except Exception:
+        _intra = {}
+
+
+def _intraday(ticker: str):
+    """차트 기간이 1일·1주면 장중 시계열 (못 받으면 빈 Series → '장중 데이터 없음'), 아니면 None(일봉)."""
+    if idx_period not in ("1일", "1주"):
+        return None
+    return _intra.get(ticker, pd.Series(dtype=float))
+
+
+def _session(ticker: str, market: str):
+    """차트 기간 1일이면 그 세션의 장 시작·마감 (한국 시각) → 가로축 고정."""
+    return session_bounds(_intra.get(ticker), market) if idx_period == "1일" else None
+
+
 for col, t in zip(st.columns(len(gm.INDICES)), gm.INDICES):
     s = live_closes[t].dropna() if t in live_closes else pd.Series(dtype=float)
     name = gm.INDICES[t][0]
@@ -54,7 +75,7 @@ for col, t in zip(st.columns(len(gm.INDICES)), gm.INDICES):
                 "asof": status.loc[t, "기준 시각"], "asof_kind": "live" if live else "close", "key": t,
                 **card_context(s, "index", last - prev)}
         index_card(f"idx_{t.strip('^')}", f"{'🟢 ' if live else ''}{name} · {fmt_asof(snap)}", snap,
-                   INDEX_CHART_DAYS[idx_period])
+                   INDEX_CHART_DAYS[idx_period], spark=_intraday(t), session=_session(t, "us"))
 st.markdown("**미국 지수 선물** · 거의 24시간 거래 (한국 낮 시간에 보는 오늘 밤 미국장 분위기)")
 for col, key in zip(st.columns(len(gm.INDICES)), ("es", "nq")):
     snap = get_snapshot(key)
@@ -64,7 +85,8 @@ for col, key in zip(st.columns(len(gm.INDICES)), ("es", "nq")):
             continue
         live = snap["asof_kind"] == "live"
         index_card(f"fut_{key}", f"{'🟢 ' if live else ''}{snap['label']} · {fmt_asof(snap)}", snap,
-                   INDEX_CHART_DAYS[idx_period])
+                   INDEX_CHART_DAYS[idx_period], spark=_intraday(SUMMARY_ITEMS[key][2]),
+                   session=_session(SUMMARY_ITEMS[key][2], "fut"))
 st.caption("기준 시각은 한국 시간 · 🟢 장중은 최신 체결 시각(Yahoo, 최대 15분 지연), '종가'는 뉴욕 정규장 마감 · "
            "선물 '마지막 체결'은 거래가 멈춘 시각(주말·휴장·일일 정산 시간) · "
            f"막대 = 1년 최저\\~최고 중 현재 위치 · ⚡ = 평소 하루 변동의 {Z_ALERT:.0f}배 이상")

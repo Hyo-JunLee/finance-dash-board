@@ -5,6 +5,7 @@ import streamlit as st
 
 import config
 from data import krx, naver_live
+from data.intraday import kr_intraday, session_bounds
 from data.market import SUMMARY_ITEMS, fmt_asof, get_snapshot
 from data.morning_brief import CLOSING_KINDS, load_closing
 from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, index_card, investor_chart, render_brief_cards, returns_bar,
@@ -56,10 +57,11 @@ if live_err:
     st.caption(f":orange[네이버 실시간 읽기 실패 → KRX 전 거래일 데이터로 표시: {live_err[:80]}]")
 
 # ── 주요 지수 카드 (오늘의 시황 카드와 같은 모양) + 시장 폭 ──────────
-INDEX_CHART_DAYS = {"1개월": 30, "3개월": 90, "6개월": 180, "1년": 365}
+INDEX_CHART_DAYS = {"1일": 1, "1주": 7, "1개월": 30, "3개월": 90, "6개월": 180, "1년": 365}  # 1일·1주는 장중 분봉
+KR_INTRADAY_CODE = {"kospi": "KOSPI", "kosdaq": "KOSDAQ", "kospi200": "KPI200"}
 i1, i2 = st.columns([3, 2], vertical_alignment="bottom")
 i1.subheader("📈 주요 지수")
-idx_period = i2.segmented_control("차트 기간", list(INDEX_CHART_DAYS), default="3개월", key="kr_idx_period") or "3개월"
+idx_period = i2.segmented_control("차트 기간", list(INDEX_CHART_DAYS), default="1일", key="kr_idx_period") or "1일"
 st.html(CONTEXT_CSS)
 c = st.columns(4)
 for col, key in zip(c[:3], ["kospi", "kosdaq", "kospi200"]):
@@ -69,8 +71,15 @@ for col, key in zip(c[:3], ["kospi", "kosdaq", "kospi200"]):
             st.metric(SUMMARY_ITEMS[key][0], "N/A", help="데이터 수집 실패", border=True)
             continue
         live = snap["asof_kind"] == "live"
+        spark = None
+        if idx_period in ("1일", "1주"):
+            try:
+                spark = kr_intraday(KR_INTRADAY_CODE[key], idx_period)
+            except Exception:
+                spark = pd.Series(dtype=float)
         index_card(f"kr_{key}", f"{'🟢 ' if live else ''}{snap['label']} · {fmt_asof(snap)}", snap,
-                   INDEX_CHART_DAYS[idx_period])
+                   INDEX_CHART_DAYS[idx_period], spark=spark,
+                   session=session_bounds(spark, "kr") if idx_period == "1일" else None)
 br = None
 if use_live:
     try:

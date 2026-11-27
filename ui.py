@@ -403,23 +403,75 @@ def render_issues(payload: dict, per_region: int = 5) -> None:
 
 
 # ── 오늘의 시황 카드용 미니 차트 (x축 날짜 표시) ───────
+def session_chart(s, up: bool, start, end, base: float | None = None, height: int = 96):
+    """1일 장중 차트: 가로축 = 장 시작~마감 고정, 지금까지만 선, 현재 위치 세로 점선, 전일 종가 가로 점선."""
+    import plotly.graph_objects as go
+
+    color = UP_COLOR if up else DOWN_COLOR
+    fill = "rgba(230,103,103,0.15)" if up else "rgba(57,135,229,0.15)"
+    vals = list(s.values) + ([base] if base is not None else [])
+    lo, hi = float(min(vals)), float(max(vals))
+    pad = (hi - lo) * 0.1 or abs(hi) * 0.01 or 1
+    fig = go.Figure(go.Scatter(
+        x=s.index, y=s.values, mode="lines", line=dict(color=color, width=1.6), fill="tozeroy", fillcolor=fill,
+        hovertemplate="%{x|%H:%M}<br>%{y:,.2f}<extra></extra>"))
+    if base is not None:
+        fig.add_hline(y=base, line=dict(color=_MUTED, width=1, dash="dot"))
+    now = pd.Timestamp.now(tz="Asia/Seoul").tz_localize(None)
+    last = s.index[-1]
+    live = start <= now <= end and now - last <= pd.Timedelta(minutes=30)
+    if live:  # 진행 중: 현재 위치 표시 + 남은 시간 비율
+        fig.add_vline(x=last, line=dict(color="rgba(255,255,255,0.55)", width=1, dash="dot"))
+        done = (last - start) / (end - start) * 100
+        fig.add_annotation(x=last, y=1, yref="paper", yanchor="bottom", showarrow=False,
+                           text=f"지금 {last:%H:%M} · {done:.0f}%", font=dict(size=9, color="rgba(255,255,255,0.75)"),
+                           xanchor="right" if done > 70 else "left")
+    mid = start + (end - start) / 2
+    # 양 끝 눈금은 그림 영역 밖으로 나가 잘리므로, 시각 라벨을 안쪽 정렬 주석으로 직접 단다 (시작 · 가운데 · 마감)
+    for x, anchor, text in ((0, "left", f"{start:%H:%M} 시작"), (0.5, "center", f"{mid:%H:%M}"),
+                            (1, "right", f"{end:%H:%M} 마감")):
+        fig.add_annotation(x=x, xref="paper", y=0, yref="paper", yanchor="top", xanchor=anchor, showarrow=False,
+                           text=text, font=dict(size=10, color=_MUTED), yshift=-2)
+    fig.update_layout(height=height, margin=dict(l=0, r=0, t=12 if live else 2, b=16), showlegend=False,
+                      hovermode="x", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    fig.update_yaxes(visible=False, range=[lo - pad, hi + pad])
+    fig.update_xaxes(showgrid=False, ticks="", showticklabels=False, linecolor=_GRID, range=[start, end])
+    return fig
+
+
 def mini_chart(s, up: bool, days: int, height: int = 96):
     """카드 아래 작은 영역 차트. y축은 숨기고 x축에 날짜 눈금 3~4개, 마우스를 올리면 날짜·값."""
     import plotly.graph_objects as go
 
     color = UP_COLOR if up else DOWN_COLOR
     fill = "rgba(230,103,103,0.15)" if up else "rgba(57,135,229,0.15)"
+    intraday = days <= 7
+    # 장중(1일·1주): 밤·주말처럼 거래 없는 시간이 긴 직선으로 이어지지 않게 순번 축에 그리고 눈금만 시각/날짜로
+    x = list(range(len(s))) if intraday else s.index
     fig = go.Figure(go.Scatter(
-        x=s.index, y=s.values, mode="lines", line=dict(color=color, width=1.6),
-        fill="tozeroy", fillcolor=fill, hovertemplate="%{x|%y/%m/%d %H:%M}<br>%{y:,.2f}<extra></extra>",
+        x=x, y=s.values, mode="lines", line=dict(color=color, width=1.6), fill="tozeroy", fillcolor=fill,
+        customdata=[f"{t:%m/%d %H:%M}" for t in s.index],
+        hovertemplate="%{customdata}<br>%{y:,.2f}<extra></extra>",
     ))
     lo, hi = float(s.min()), float(s.max())
     pad = (hi - lo) * 0.08 or abs(hi) * 0.01 or 1
     fig.update_layout(height=height, margin=dict(l=0, r=0, t=2, b=0), showlegend=False, hovermode="x",
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
     fig.update_yaxes(visible=False, range=[lo - pad, hi + pad])
-    fig.update_xaxes(showgrid=False, ticks="", nticks=4, tickfont=dict(size=10, color=_MUTED),
-                     tickformat="%-m/%-d" if days <= 95 else "%y.%-m", linecolor=_GRID)
+    axis = dict(showgrid=False, ticks="", tickfont=dict(size=10, color=_MUTED), linecolor=_GRID)
+    if intraday:
+        if days <= 1:  # 시각 눈금 4개
+            pos = [round(i * (len(s) - 1) / 4) for i in range(1, 4)]
+            labels = [f"{s.index[i]:%H:%M}" for i in pos]
+        else:  # 거래일(45분 넘게 끊긴 곳에서 새 세션)마다 첫 지점에 날짜 — 미국장은 한국 시간으로 자정을 넘겨도 한 세션
+            gaps = pd.Series(s.index).diff() > pd.Timedelta(minutes=45)
+            pos = [i for i in range(len(s)) if i == 0 or gaps.iloc[i]]
+            labels = [f"{s.index[i]:%-m/%-d}" for i in pos]
+            if len(pos) > 1:
+                pos, labels = pos[1:], labels[1:]  # 맨 왼쪽 끝 눈금은 잘려서 생략
+        fig.update_xaxes(**axis, tickmode="array", tickvals=pos, ticktext=labels, tickangle=0, range=[0, len(s) - 1])
+    else:
+        fig.update_xaxes(**axis, nticks=4, tickformat="%-m/%-d" if days <= 95 else "%y.%-m")
     return fig
 
 
@@ -484,9 +536,12 @@ def context_html(snap: dict) -> str:
     )
 
 
-def index_card(card_key: str, title: str, snap: dict, days: int) -> None:
+def index_card(card_key: str, title: str, snap: dict, days: int, spark: pd.Series | None = None,
+               session: tuple | None = None) -> None:
     """지수 카드 (국내·미국 증시 공용): 현재값·전일 대비, 1년 범위 막대, 1주·1개월·YTD·1년 변화, 미니 차트.
-    snap: last·chg·pct·series + card_context 결과(range·z·periods). 오늘 변화가 이례적이면 테두리를 주황색으로."""
+    snap: last·chg·pct·series + card_context 결과(range·z·periods). 오늘 변화가 이례적이면 테두리를 주황색으로.
+    spark: 차트 기간 1일·1주일 때 장중 시계열 (없으면 일봉에서 days일). 1일 차트 색은 전일 종가 대비 방향.
+    session: 1일일 때 (장 시작, 장 마감) 한국 시각 → 가로축 고정·현재 위치 표시."""
     s = snap["series"]
     base = s[s.index <= s.index[-1] - pd.Timedelta(days=365)]
     periods = dict(snap["periods"])
@@ -498,9 +553,17 @@ def index_card(card_key: str, title: str, snap: dict, days: int) -> None:
                   delta_color="red" if chg > 0 else "blue" if chg < 0 else "gray",
                   help="1년 범위 막대: 최근 1년 최저\\~최고 중 현재 위치 · 기간 변화는 % · 미니 차트 색은 선택한 기간 동안의 방향")
         st.html(context_html({**snap, "periods": periods}))
-        spark = s[s.index >= pd.Timestamp.now() - pd.Timedelta(days=days)]
+        intraday = spark is not None
+        if not intraday:
+            spark = s[s.index >= pd.Timestamp.now() - pd.Timedelta(days=days)]
         if len(spark) > 1:
-            show_chart(mini_chart(spark, spark.iloc[-1] >= spark.iloc[0], days))
+            up = chg >= 0 if intraday and days <= 1 else spark.iloc[-1] >= spark.iloc[0]
+            if intraday and days <= 1 and session:  # 1일: 장 시작~마감 고정 축 + 현재 위치 + 전일 종가 선
+                show_chart(session_chart(spark, up, *session, base=snap["last"] - chg))
+            else:
+                show_chart(mini_chart(spark, up, days))
+        elif intraday:
+            st.caption("장중 데이터 없음")
     if snap["z"] == snap["z"] and abs(snap["z"]) >= Z_ALERT:
         st.html(f"<style>.st-key-{card_key} {{ border-color:#f0a35a !important; }}</style>")
 
