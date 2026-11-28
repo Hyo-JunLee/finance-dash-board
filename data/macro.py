@@ -22,6 +22,9 @@ FRED_IDS = [
     "PAYEMS", "UNRATE", "ICSA", "IC4WSA", "JTSJOL",
     "A191RL1Q225SBEA", "RSAFS", "INDPRO", "HOUST",
     "BAMLH0A0HYM2", "BAMLC0A0CM", "NFCI",
+    # 국면·통화정책·물가 분해·경기 신호
+    "DFEDTARL", "CPILFESL", "CUSR0000SACL1E", "CUSR0000SAH1", "CUSR0000SASL2RS",
+    "SAHMREALTIME", "GDPNOW", "JTSQUR", "CFNAIMA3",
 ]
 
 CURVE_COLS = ["1 Mo", "3 Mo", "6 Mo", "1 Yr", "2 Yr", "3 Yr", "5 Yr", "7 Yr", "10 Yr", "20 Yr", "30 Yr"]

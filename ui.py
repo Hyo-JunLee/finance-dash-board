@@ -980,3 +980,72 @@ def render_hl_section(expanded: bool) -> None:
         st.caption("실제 지수·주식이 아니라 하이퍼리퀴드 XYZ의 암호화폐 담보 무기한 선물 가격(펀딩비 등으로 실제와 차이 가능) · "
                    "기준 = 직전 평일 정규장 마감(미국 16:00 ET · 한국·일본 15:30 · 원자재 17:00 ET, 휴장일 미반영) · "
                    "차트 = 기준 시각 이후 15분봉 · 거래 적은 종목은 가격이 튈 수 있음")
+
+
+# ── 매크로 국면 사분면 ───────────────────────────────────
+def regime_chart(hist, height: int = 330):
+    """성장(가로) × 물가(세로) 사분면에 최근 12개월 궤적. 마지막 점 = 현재."""
+    import plotly.graph_objects as go
+    xs, ys = hist["성장"].tolist(), hist["물가"].tolist()
+    lim_x = max(0.4, max(abs(v) for v in xs) * 1.3)
+    lim_y = max(2.0, max(abs(v) for v in ys) * 1.25)
+    fig = go.Figure()
+    for x0, x1, y0, y1, color, label, ax, ay in (
+            (0, lim_x, -lim_y, 0, "rgba(25,158,112,0.10)", "골디락스", 1, -1),
+            (0, lim_x, 0, lim_y, "rgba(240,163,90,0.10)", "리플레이션·과열", 1, 1),
+            (-lim_x, 0, 0, lim_y, "rgba(230,103,103,0.12)", "스태그플레이션", -1, 1),
+            (-lim_x, 0, -lim_y, 0, "rgba(57,135,229,0.10)", "디플레이션·둔화", -1, -1)):
+        fig.add_shape(type="rect", x0=x0, x1=x1, y0=y0, y1=y1, fillcolor=color, line=dict(width=0), layer="below")
+        fig.add_annotation(x=ax * lim_x * 0.96, y=ay * lim_y * 0.93, text=label, showarrow=False,
+                           xanchor="right" if ax > 0 else "left", font=dict(size=11, color="rgba(255,255,255,0.55)"))
+    labels = [f"{t:%y.%m}" for t in hist.index]
+    fig.add_scatter(x=xs, y=ys, mode="lines+markers", line=dict(color="rgba(255,255,255,0.35)", width=1.2),
+                    marker=dict(size=[5] * (len(xs) - 1) + [13], color=list(range(len(xs))), colorscale="Blues",
+                                line=dict(width=[0] * (len(xs) - 1) + [2], color="white")),
+                    text=labels, hovertemplate="%{text}<br>성장 %{x:+.2f} · 물가 목표 대비 %{y:+.2f}%p<extra></extra>")
+    fig.add_annotation(x=xs[-1], y=ys[-1], text=f"지금 ({labels[-1]})", showarrow=True, arrowhead=0, ax=30, ay=-24,
+                       font=dict(size=11, color="white"))
+    fig = _base_layout(fig, None, "", height, legend=False)
+    fig.update_xaxes(title="성장: 시카고 연은 활동지수 3개월 평균 (0 = 추세)", range=[-lim_x, lim_x], zeroline=True,
+                     zerolinecolor="rgba(255,255,255,0.4)", title_font=dict(size=11))
+    fig.update_yaxes(title="물가: 근원 PCE 3개월 연율 − 2%", range=[-lim_y, lim_y], zeroline=True,
+                     zerolinecolor="rgba(255,255,255,0.4)", ticksuffix="%p", title_font=dict(size=11))
+    fig.update_layout(hovermode="closest")
+    return fig
+
+
+# ── FOMC 확률 (FedWatch 방식) ────────────────────────────
+FEDWATCH_CSS = """<style>
+.fw { font-size:.84rem; }
+.fw-row { display:grid; grid-template-columns: 7.5rem 1fr 7.5rem 5rem; gap:.8rem; align-items:center; padding:.42rem 0;
+          border-bottom:1px solid rgba(255,255,255,.07); }
+.fw-head { font-size:.72rem; opacity:.55; border-bottom:none; padding-bottom:0; }
+.fw-bar { display:flex; height:18px; border-radius:4px; overflow:hidden; background:rgba(255,255,255,.05); }
+.fw-bar span { display:flex; align-items:center; justify-content:center; font-size:.7rem; font-weight:700; color:#fff;
+               white-space:nowrap; overflow:hidden; }
+.fw-cut { background:#3987e5; } .fw-hold { background:rgba(255,255,255,.22); } .fw-hike { background:#e66767; }
+.fw-num { font-variant-numeric:tabular-nums; text-align:right; }
+.fw-sub { font-size:.7rem; opacity:.55; }
+@media (max-width: 640px) { .fw-row { grid-template-columns: 6rem 1fr; } .fw-row .fw-num { text-align:left; } }
+</style>"""
+
+
+def fedwatch_html(rows: list[dict], today, current_upper: float) -> str:
+    """회의별 인하·동결·인상 확률 막대 + 회의 후 시장 금리 + 현재 대비 누적 변화."""
+    e = html.escape
+    out = ['<div class="fw"><div class="fw-row fw-head"><div>FOMC (결정일)</div><div>인하 · 동결 · 인상 확률</div>'
+           '<div class="fw-num">회의 후 시장 금리</div><div class="fw-num">누적</div></div>']
+    for r in rows:
+        d = r["날짜"]
+        segs = "".join(f'<span class="{cls}" style="width:{p * 100:.1f}%">{f"{lab} {p:.0%}" if p >= 0.12 else ""}</span>'
+                       for cls, lab, p in (("fw-cut", "인하", r["인하"]), ("fw-hold", "동결", r["동결"]),
+                                           ("fw-hike", "인상", r["인상"])) if p > 0.001)
+        likely = max(r["분포"].items(), key=lambda kv: kv[1])
+        dd = (d - today).days
+        out.append(
+            f'<div class="fw-row"><div>{d:%y/%m/%d}({"월화수목금토일"[d.weekday()]})<div class="fw-sub">D-{dd} · '
+            f'유력 {e(f"{likely[0]:+d}bp" if likely[0] else "동결")}</div></div>'
+            f'<div class="fw-bar">{segs}</div>'
+            f'<div class="fw-num">{r["후"]:.2f}%<div class="fw-sub">회의 {r["변화bp"]:+.0f}bp</div></div>'
+            f'<div class="fw-num">{r["누적bp"]:+.0f}bp</div></div>')
+    return FEDWATCH_CSS + "".join(out) + "</div>"

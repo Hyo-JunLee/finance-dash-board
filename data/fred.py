@@ -128,7 +128,7 @@ def fetch_release_dates(series_id: str, obs_date: date) -> list[date]:
 
 
 def transform(s: pd.Series, how: str) -> pd.Series:
-    """yoy/mom = 전년·전월 대비 %, diff = 직전 기간 대비 증감, level = 원값.
+    """yoy/mom = 전년·전월 대비 %, ann3/ann6 = 최근 3·6개월 연율 %, diff = 직전 기간 대비 증감, level = 원값.
 
     비교 대상은 '날짜' 기준(12개월 전·1개월 전)으로 찾는다. 2025-10월처럼 발표가 빠진 달이 있으면
     순서 기준(pct_change(12))은 13개월 전과 비교하게 되어 값이 틀어진다 (CPI 3.4% → 3.69%로 표시됐던 원인).
@@ -142,6 +142,11 @@ def transform(s: pd.Series, how: str) -> pd.Series:
         base = s.reindex(s.index - pd.DateOffset(months=months))
         base.index = s.index
         return (s / base - 1) * 100 if how != "diff" else s - base
+    if how in ("ann3", "ann6"):  # 최근 3·6개월 변화를 연율로 (연준이 보는 물가 모멘텀). 날짜 기준 비교
+        months = 3 if how == "ann3" else 6
+        base = s.reindex(s.index - pd.DateOffset(months=months))
+        base.index = s.index
+        return ((s / base) ** (12 / months) - 1) * 100
     if how == "diff":
         return s.diff()
     raise ValueError(f"알 수 없는 변환: {how}")
