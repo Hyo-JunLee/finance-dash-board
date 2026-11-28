@@ -7,12 +7,13 @@ import config
 from data.consensus import parse_value
 from data.econ_calendar import (ff_fetched_at, get_recent_indicators, get_week_actuals, get_week_calendar,
                                  refresh_bucket)
+from data.hyperliquid import is_weekend
 from data.intraday import session_bounds
 from data.market import SUMMARY_ITEMS, fmt_asof, get_snapshot
 from data.news import get_news, load_news_summary
 from data.telegram import load_summary, recent_posts
 from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, context_html, mini_chart, session_chart, render_brief_cards, render_issues,
-                release_board, render_news, render_post_list, render_release_insights, render_summary, render_views, show_chart)
+                release_board, render_hl_section, render_news, render_post_list, render_release_insights, render_summary, render_views, show_chart)
 
 PERIODS = {"1일": 1, "1주": 7, "1개월": 30, "3개월": 90, "6개월": 180, "1년": 365}  # 1일·1주는 장중 분봉
 # 카드별 장중 데이터 (출처, 심볼, 1일 가로축 세션). 국고 3년은 장중 데이터가 없어 일봉으로 대신
@@ -103,6 +104,8 @@ def _morning_brief() -> None:
 
 
 _morning_brief()
+if is_weekend():  # 주말: 아침 시황 아래에 24시간 시세 (하이퍼리퀴드)
+    render_hl_section(expanded=True)
 
 # ── 요약 카드 (자산군별) ─────────────────────────────
 CARD_ROWS = [

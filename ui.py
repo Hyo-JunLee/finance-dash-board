@@ -941,3 +941,42 @@ def expiry_line(today=None, markets=("국내", "미국"), n: int = 4) -> str:
         tag = "**오늘**" if d == 0 else f"**D-{d}**" if d <= 7 else f"D-{d}"
         parts.append(f"{e['날짜']:%m/%d}({'월화수목금토일'[e['날짜'].weekday()]}) {e['시장']} {e['이름']} {tag}")
     return " · ".join(parts)
+
+
+# ── 🌐 24시간 시세 (하이퍼리퀴드 XYZ) ─────────────────────────
+def render_hl_section(expanded: bool) -> None:
+    """주말·휴장 때 보는 24시간 시세. expanded면 펼친 박스(주말), 아니면 접힌 expander(평일)."""
+    from data.hyperliquid import REF_LABEL, THIN_USD, snapshot
+    title = "🌐 24시간 시세 · 하이퍼리퀴드 — 직전 정규장 마감 대비 (월요일 갭 가늠)"
+    box = st.container(border=True) if expanded else st.expander(title + " · 평일엔 미국장 밖·휴장 때 참고")
+    with box:
+        if expanded:
+            st.markdown(f"**{title}**")
+        try:
+            df = snapshot()
+        except Exception as e:
+            st.caption(f"하이퍼리퀴드 시세를 불러오지 못했습니다: {str(e)[:80]}")
+            return
+        for group in ("지수", "종목", "원자재"):
+            sub = df[df["묶음"] == group]
+            if sub.empty:
+                continue
+            st.caption(f"**{group}**")
+            for col, r in zip(st.columns(max(len(sub), 4) if group != "종목" else 6), sub.to_dict("records")):
+                with col, st.container(border=True):
+                    pct = r["등락률"]
+                    ref = f"{r['기준가']:,.2f}" if r["기준가"] else "-"
+                    st.metric(r["이름"], f"{r['현재가']:,.2f}", f"{pct:+.2f}%" if pct is not None else None,
+                              delta_color="red" if (pct or 0) > 0 else "blue" if (pct or 0) < 0 else "gray",
+                              help=f"기준: {REF_LABEL[r['기준']]} {r['기준 시각']:%m/%d %H:%M} (KST) 가격 {ref} · "
+                                   f"하이퍼리퀴드 XYZ:{r['coin']} 무기한 선물")
+                    s = r["차트"]
+                    if len(s) > 1:
+                        span1d = s.index[-1] - s.index[0] <= pd.Timedelta(hours=26)
+                        show_chart(mini_chart(s, s.iloc[-1] >= s.iloc[0], 1 if span1d else 7, height=70))
+                    thin = r["거래대금"] < THIN_USD
+                    st.caption(f"{r['기준 시각']:%m/%d %H:%M} 대비 · 24h ${r['거래대금'] / 1e6:,.0f}M"
+                               + (" · :orange[거래 적음]" if thin else ""))
+        st.caption("실제 지수·주식이 아니라 하이퍼리퀴드 XYZ의 암호화폐 담보 무기한 선물 가격(펀딩비 등으로 실제와 차이 가능) · "
+                   "기준 = 직전 평일 정규장 마감(미국 16:00 ET · 한국·일본 15:30 · 원자재 17:00 ET, 휴장일 미반영) · "
+                   "차트 = 기준 시각 이후 15분봉 · 거래 적은 종목은 가격이 튈 수 있음")

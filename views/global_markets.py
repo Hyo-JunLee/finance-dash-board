@@ -5,9 +5,11 @@ import streamlit as st
 
 from data import global_markets as gm
 from data.earnings import KST_HINT, upcoming
+from data.hyperliquid import is_weekend
 from data.intraday import session_bounds, us_intraday
 from data.market import SUMMARY_ITEMS, card_context, fmt_asof, get_snapshot
-from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, expiry_line, index_card, line_chart, render_us_brief,
+from ui import (CONTEXT_CSS, DOWN_COLOR, UP_COLOR, Z_ALERT, expiry_line, index_card, line_chart, render_hl_section,
+                render_us_brief,
                 returns_bar, show_chart, term_structure_chart, treemap)
 
 RET_COLS = list(gm.PERIODS)
@@ -18,6 +20,7 @@ CHART_PERIODS = {"3개월": pd.DateOffset(months=3), "6개월": pd.DateOffset(mo
 st.title("미국 증시")
 st.caption(f"조회 시각 {datetime.now():%Y-%m-%d %H:%M} · Yahoo Finance (수정주가, 5분 캐시) · 상승 빨강 / 하락 파랑")
 render_us_brief()  # 맨 위 원문 박스 (국내 증시의 마감 시황 박스와 같은 자리)
+render_hl_section(expanded=is_weekend())  # 주말엔 펼쳐서, 평일엔 접어서
 
 
 def _ret_color(v) -> str:
